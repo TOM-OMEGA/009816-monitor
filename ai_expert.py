@@ -1,57 +1,62 @@
 import os
 import requests
 
-def get_ai_point(summary):
+def get_ai_point(summary, target_name):
     gemini_key = os.environ.get('GEMINI_API_KEY')
     if not gemini_key: return "❌ Secret 錯誤"
 
-    # 使用你清單中最頂級的 Gemini 3 Pro 預覽版
-    # 注意：API URL 中的模型名稱通常不需要 "models/" 前綴，但要確保字串完全正確
+    # 使用頂級 Gemini 3 Pro 預覽版
     model_name = "gemini-3-pro-preview" 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
     
-    # 保持你成功的單一字串結構，但注入核心數據規則
-    
+    # 針對標的屬性區分「連動監控」重點
+    if "009816" in target_name:
+        # 模式 A：結婚基金 (核心波段避險)
+        persona_logic = (
+            "身分：基金經理人 (守護 2027 結婚基金)。\n"
+            "監控：台積電(TSM)溢價、費半(SOX)補跌壓力、10.12 目標價執行。\n"
+            "準則：長線期望值為重，嚴禁頻繁交易，重點在於風險回測與溢價收斂。"
+        )
+    else:
+        # 模式 B：網格實驗室 (作者劉承彥心法注入)
+        # 根據不同標的調整監控權重
+        if "2317" in target_name or "00929" in target_name:
+            focus = "【重點監控：TSM/SOX 科技連動】"
+        else:
+            focus = "【重點監控：台股加權指數 & 金融防禦性】"
+            
+        persona_logic = (
+            f"身分：作者劉承彥。標的：{target_name}。{focus}\n"
+            "請嚴守以下十條實戰鐵律進行診斷：\n"
+            "1.【期望值】: 確保標長期趨勢向上，避開無回彈力的弱勢股。\n"
+            "2.【非加碼】: 嚴禁主觀攤平，必須是有賣才有買的網格循環。\n"
+            "3.【趨勢濾網】: 破 20MA/60MA 且向下時屬空頭，判定『破網風險』，暫緩買入。\n"
+            "4.【動態間距】: 依波動度與美股/大盤壓力調整寬度，防止資金過快耗盡。\n"
+            "5.【資金控制】: 嚴控單一標的 3,333 元上限，不因過度補貨影響本金。\n"
+            "6.【除息還原】: 考慮高息 ETF 除息後的股價調整，避免誤觸補貨點。\n"
+            "7.【低成本】: 善用國泰 1 元手續費，價差需覆蓋成本才執行。\n"
+            "8.【情緒收割】: RSI > 75 判定極端貪婪，應收割利潤而非追高佈單。\n"
+            "9.【連動風險】: 追蹤 TSM/SOX 走勢與台股大盤點數，預防跳空補跌與溢價風險。\n"
+            "10.【自動化】: 克服人性，一旦邏輯確立則排程執行，嚴禁情緒干預。"
+        )
+
     task_description = (
-        f"你是專業基金經理人。數據：{summary}。目前 009816 持股台積電達 40%，"
-        f"請針對 RSI 超過 70 的過熱風險、美股費半大跌 2% 的補跌壓力，"
-        f"以及 10.12 目標價的執行紀律，為一年後的結婚基金需求給予 120 字內冷靜且具前瞻性的觀察建議，"
-        f"參考 RSI 數值：超過 70 為極端過熱，低於 30 為超跌，"
-        f"必須考慮美股 (費半/TSM) 與台股 ETF 之間的連動延遲與溢價風險，"
-        f"重視 RSI < 35 或 5日乖離率 < -1.5% 的超跌機會，"
-        f"語氣專業沈穩，數據導向，比對大盤財報前與預測一年後的長線情況，"
-        f". 數據要準確，要提供當下最準確的數據，避免不實推測。"
-        f"你也是自動化股票網格交易實戰86個活用技巧的作者。你會依照你寫的書來判斷網格交易是否可行，"
+        f"【角色身分】: {persona_logic}\n"
+        f"【當前數據】: {summary}\n"
+        f"【任務】: 結合上述鐵律，針對 {target_name} 給予 150 字內診斷。\n"
+        f"【要求】: 必須明確給出『執行建議：可行/不可行/觀望』。2027 年視角，數據導向，沈穩且具權威性。"
     )
 
     payload = {
         "contents": [{"parts": [{"text": task_description}]}],
-        "generationConfig": {
-            "temperature": 0.7, # 稍微增加一點創造力，讓點評更具前瞻性
-            "topP": 0.95
-        }
+        "generationConfig": {"temperature": 0.7, "topP": 0.95}
     }
 
     try:
         res = requests.post(url, json=payload, timeout=30)
         result = res.json()
-        
         if 'candidates' in result:
-            # 成功獲取 Gemini 3 Pro 的深度點評
             return result['candidates'][0]['content']['parts'][0]['text']
-        else:
-            # 備援 1：使用你清單中的穩定版 Gemini 2.5 Flash
-            alt_model = "gemini-2.5-flash"
-            alt_url = f"https://generativelanguage.googleapis.com/v1beta/models/{alt_model}:generateContent?key={gemini_key}"
-            res_alt = requests.post(alt_url, json=payload, timeout=20)
-            res_json = res_alt.json()
-            
-            if 'candidates' in res_json:
-                return res_json['candidates'][0]['content']['parts'][0]['text']
-            else:
-                # 最終保險，輸出 API 原始錯誤，方便我們除錯
-                error_msg = result.get('error', {}).get('message', '未知錯誤')
-                return f"💡 系統校對中：{error_msg[:30]}"
-                
+        return "💡 系統校對中，請維持紀律。"
     except Exception as e:
-        return f"❌ 連線異常: {str(e)[:20]}"
+        return f"❌ AI 顧問連線中：({str(e)[:15]})"
