@@ -5,10 +5,13 @@ def get_ai_point(summary):
     gemini_key = os.environ.get('GEMINI_API_KEY')
     if not gemini_key: return "❌ Secret 錯誤"
 
-    # 鎖定 Gemini 3 穩定路徑
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={gemini_key}"
+    # 使用你清單中最頂級的 Gemini 3 Pro 預覽版
+    # 注意：API URL 中的模型名稱通常不需要 "models/" 前綴，但要確保字串完全正確
+    model_name = "gemini-3-pro-preview" 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
     
     # 保持你成功的單一字串結構，但注入核心數據規則
+    
     task_description = (
         f"你是專業基金經理人。數據：{summary}。目前 009816 持股台積電達 40%，"
         f"請針對 RSI 超過 70 的過熱風險、美股費半大跌 2% 的補跌壓力，"
@@ -21,7 +24,11 @@ def get_ai_point(summary):
     )
 
     payload = {
-        "contents": [{"parts": [{"text": task_description}]}]
+        "contents": [{"parts": [{"text": task_description}]}],
+        "generationConfig": {
+            "temperature": 0.7, # 稍微增加一點創造力，讓點評更具前瞻性
+            "topP": 0.95
+        }
     }
 
     try:
@@ -29,12 +36,21 @@ def get_ai_point(summary):
         result = res.json()
         
         if 'candidates' in result:
+            # 成功獲取 Gemini 3 Pro 的深度點評
             return result['candidates'][0]['content']['parts'][0]['text']
         else:
-            # 備援：2.5 穩定版
-            alt_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+            # 備援 1：使用你清單中的穩定版 Gemini 2.5 Flash
+            alt_model = "gemini-2.5-flash"
+            alt_url = f"https://generativelanguage.googleapis.com/v1beta/models/{alt_model}:generateContent?key={gemini_key}"
             res_alt = requests.post(alt_url, json=payload, timeout=20)
             res_json = res_alt.json()
-            return res_json['candidates'][0]['content']['parts'][0]['text'] if 'candidates' in res_json else "💡 現象：溢價偏高且數據連動風險大，嚴守 10.12 紀律。"
+            
+            if 'candidates' in res_json:
+                return res_json['candidates'][0]['content']['parts'][0]['text']
+            else:
+                # 最終保險，輸出 API 原始錯誤，方便我們除錯
+                error_msg = result.get('error', {}).get('message', '未知錯誤')
+                return f"💡 系統校對中：{error_msg[:30]}"
+                
     except Exception as e:
         return f"❌ 連線異常: {str(e)[:20]}"
