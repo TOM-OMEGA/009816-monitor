@@ -1,7 +1,7 @@
 import os
 import requests
 import yfinance as yf
-import time  # 新增：用於控制發報頻率
+import time
 from datetime import datetime, timedelta
 from ai_expert import get_ai_point
 from flask import Flask
@@ -13,6 +13,17 @@ USER_ID = os.environ.get('USER_ID')
 
 # 全域變數：記錄上一次成功發報的時間戳
 last_send_time = 0
+
+def is_market_open():
+    """檢查現在是否為台灣交易時段 (週一至週五 09:00 - 14:00)"""
+    now_tw = datetime.utcnow() + timedelta(hours=8)
+    # 1. 檢查是否為週末
+    if now_tw.weekday() >= 5:
+        return False
+    # 2. 檢查時間範圍
+    start_time = now_tw.replace(hour=9, minute=0, second=0, microsecond=0)
+    end_time = now_tw.replace(hour=14, minute=0, second=0, microsecond=0)
+    return start_time <= now_tw < end_time
 
 def get_data(ticker):
     try:
@@ -70,14 +81,18 @@ def home():
     global last_send_time
     current_ts = time.time()
     
-    # 設定冷卻時間為 180 秒 (3 分鐘)
+    # 1. 檢查是否為交易時段 (09:00 - 14:00)
+    if not is_market_open():
+        return "<h1>非交易時段</h1><p>經理人哨兵休假中，開盤時間會自動恢復監控。</p>"
+    
+    # 2. 檢查冷卻時間 (180 秒 = 3 分鐘)
     if current_ts - last_send_time > 180:
         result = monitor()
         last_send_time = current_ts
         return f"<h1>三分鐘戰報已發送</h1><p>{result}</p>"
     else:
         remaining = int(180 - (current_ts - last_send_time))
-        return f"<h1>系統冷卻中</h1><p>請等待 {remaining} 秒後自動產出下一報。</p>"
+        return f"<h1>系統冷慮中</h1><p>請等待 {remaining} 秒後自動產出下一報。</p>"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
