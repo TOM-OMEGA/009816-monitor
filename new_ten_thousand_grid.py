@@ -3,7 +3,7 @@ import requests
 import os
 import pandas as pd
 from datetime import datetime
-from ai_expert import get_ai_point  # 👈 串接你的 AI 專家模組
+from ai_expert import get_ai_point
 
 # --- 1. 一萬元實驗配置 ---
 TARGETS = {
@@ -23,13 +23,15 @@ def check_trend(df):
     return "🟡 區間震盪 (網格套利機會)"
 
 def run_unified_experiment():
-    line_token = os.environ.get('LINE_TOKEN')
+    # ✅ 統一環境變數名稱，改用 Messaging API 規格
+    line_token = os.environ.get('LINE_ACCESS_TOKEN')
+    user_id = os.environ.get('USER_ID')
+    
     report = f"🦅 經理人「一萬元實驗」AI 總體診斷\n日期: {datetime.now().strftime('%Y-%m-%d')}\n"
     report += "----------------------------"
 
     for symbol, cfg in TARGETS.items():
         ticker = yf.Ticker(symbol)
-        # 抓取 60 天數據以計算趨勢
         df = ticker.history(period="60d").ffill()
         curr_p = df['Close'].iloc[-1]
         
@@ -43,7 +45,7 @@ def run_unified_experiment():
         rsi = 100 - (100 / (1 + (gain / loss).iloc[-1]))
         bias_5 = ((curr_p - df['Close'].rolling(5).mean().iloc[-1]) / df['Close'].rolling(5).mean().iloc[-1]) * 100
         
-        # 3. 呼叫你的 AI.py 進行點評
+        # 3. 呼叫更新後的 AI.py 進行點評
         summary = f"現價:{curr_p:.2f}, RSI:{rsi:.1f}, 5日乖離:{bias_5:.2f}%, 盤勢:{trend_status}"
         ai_comment = get_ai_point(summary, cfg['name'])
         
@@ -59,11 +61,21 @@ def run_unified_experiment():
         else:
             report += f"\n✅ [行動] 建議單筆網格交易 {trade_shares} 股。"
 
-    # 發送 LINE
-    if line_token:
-        requests.post("https://notify-api.line.me/api/notify", 
-                      headers={"Authorization": f"Bearer {line_token}"}, 
-                      data={"message": report})
+    # ✅ 修正發送邏輯：使用 Messaging API Push Message
+    if line_token and user_id:
+        url = "https://api.line.me/v2/bot/message/push"
+        headers = {
+            "Authorization": f"Bearer {line_token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "to": user_id,
+            "messages": [{"type": "text", "text": report}]
+        }
+        res = requests.post(url, headers=headers, json=payload)
+        print(f"網格戰報發送狀態: {res.status_code}")
+    else:
+        print("❌ 錯誤：缺少 LINE_ACCESS_TOKEN 或 USER_ID")
 
 if __name__ == "__main__":
     run_unified_experiment()
