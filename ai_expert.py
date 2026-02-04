@@ -1,13 +1,18 @@
 import os
 import requests
 
-def get_ai_point(summary, target_name):
+def get_ai_point(summary, target_name, extra_data=None):
     gemini_key = os.environ.get('GEMINI_API_KEY')
     if not gemini_key: return "❌ Secret 錯誤"
 
     # 使用頂級 Gemini 3 Pro 預覽版
     model_name = "gemini-3-pro-preview" 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+    
+    # 提取 FinMind 數據以便注入任務描述
+    inst_info = extra_data.get('inst', '尚無數據') if extra_data else "尚無數據"
+    rev_info = extra_data.get('rev', '尚無數據') if extra_data else "尚無數據"
+    holder_info = extra_data.get('holders', '尚無數據') if extra_data else "尚無數據"
     
     # 針對標的屬性區分「連動監控」重點
     if "009816" in target_name:
@@ -19,7 +24,6 @@ def get_ai_point(summary, target_name):
         )
     else:
         # 模式 B：網格實驗室 (作者劉承彥心法注入)
-        # 根據不同標的調整監控權重
         if "2317" in target_name or "00929" in target_name:
             focus = "【重點監控：TSM/SOX 科技連動】"
         else:
@@ -40,11 +44,13 @@ def get_ai_point(summary, target_name):
             "10.【自動化】: 克服人性，一旦邏輯確立則排程執行，嚴禁情緒干預。"
         )
 
+    # 將精準數據與您的任務要求結合
     task_description = (
         f"【角色身分】: {persona_logic}\n"
         f"【當前數據】: {summary}\n"
-        f"【任務】: 結合上述鐵律，針對 {target_name} 給予 150 字內診斷。\n"
-        f"【要求】: 必須明確給出『執行建議：可行/不可行/觀望』。2027 年視角，數據導向，沈穩且具權威性。"
+        f"【籌碼/基本面數據】: 法人:{inst_info}, 營收:{rev_info}, 大戶:{holder_info}\n"
+        f"【任務】: 結合上述鐵律與精準數據，針對 {target_name} 給予 150 字內診斷。\n"
+        f"【要求】: 必須明確給出『執行建議：可行/不可行/觀望』。2027 年視告，數據導向，沈穩且具權威性。"
     )
 
     payload = {
