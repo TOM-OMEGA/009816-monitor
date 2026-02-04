@@ -1,14 +1,18 @@
 import os
 import requests
 import yfinance as yf
+import time  # 新增：用於控制發報頻率
 from datetime import datetime, timedelta
 from ai_expert import get_ai_point
-from flask import Flask  # 新增：建立網頁服務
+from flask import Flask
 
 app = Flask(__name__)
 
 LINE_TOKEN = os.environ.get('LINE_ACCESS_TOKEN')
 USER_ID = os.environ.get('USER_ID')
+
+# 全域變數：記錄上一次成功發報的時間戳
+last_send_time = 0
 
 def get_data(ticker):
     try:
@@ -20,7 +24,7 @@ def get_data(ticker):
         return 0.0, 0.0
 
 def monitor():
-    print("🚀 啟動實時數據抓取與分析...")
+    print("🚀 執行經理人實時戰報校對...")
     price_00, _ = get_data("009816.TW")
     _, sox_pct = get_data("^SOX")
     _, tsm_pct = get_data("TSM")
@@ -43,7 +47,7 @@ def monitor():
     try:
         ai_msg = get_ai_point(summary)
     except Exception as e:
-        ai_msg = f"💡 經理人提醒：數據解析中，請堅持 10.12 紀律。"
+        ai_msg = f"💡 數據傳輸中，請堅持 10.12 紀律。"
 
     full_msg = (
         f"🦅 經理人戰報 ({current_time})\n"
@@ -61,14 +65,20 @@ def monitor():
         return f"戰報已送達 - {current_time}"
     return "Token 遺失"
 
-# 當 UptimeRobot 訪問你的網址時，會觸發這個路徑
 @app.route('/')
 def home():
-    # 每次被訪問就執行一次監控，確保準時
-    result = monitor()
-    return f"<h1>系統運行中</h1><p>{result}</p>"
+    global last_send_time
+    current_ts = time.time()
+    
+    # 設定冷卻時間為 180 秒 (3 分鐘)
+    if current_ts - last_send_time > 180:
+        result = monitor()
+        last_send_time = current_ts
+        return f"<h1>三分鐘戰報已發送</h1><p>{result}</p>"
+    else:
+        remaining = int(180 - (current_ts - last_send_time))
+        return f"<h1>系統冷卻中</h1><p>請等待 {remaining} 秒後自動產出下一報。</p>"
 
 if __name__ == "__main__":
-    # Render 會自動分配 PORT
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
