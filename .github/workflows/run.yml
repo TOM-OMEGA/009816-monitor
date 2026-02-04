@@ -1,17 +1,14 @@
-name: 009816 經理人定時戰報
+name: 009816 & 萬元實驗室 經理人戰報
 
 on:
   schedule:
-    # 台灣時間 (UTC+8) 09:00 - 14:00
-    # 對應 UTC 時間為 01:00 - 06:00
-    # 使用 */3 分鐘觸發一次，以對沖 GitHub 伺服器的延遲，確保體感在 5 分鐘內
+    # 台灣時間 (UTC+8) 09:00 - 14:00 -> UTC 01:00 - 06:00
     - cron: '*/3 1-6 * * 1-5'
-  workflow_dispatch: # 保留手動按鈕，隨時想看數據點一下就發報
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 避免重複任務堆積，如果上一個還在跑，就自動取消
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
@@ -24,14 +21,24 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+          cache: 'pip' # ✅ 開啟緩存，加快安裝速度
 
       - name: 安裝必要套件
         run: |
-          pip install yfinance requests pandas
+          pip install -r requirements.txt
 
-      - name: 執行戰報監控
+      - name: 執行 009816 核心監控
         env:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN }}
           USER_ID: ${{ secrets.USER_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
+
+      # ✅ 新增：在 09:15 (開盤初診) 與 13:45 (收盤前夕) 執行一萬元網格實驗
+      - name: 執行一萬元實驗診斷
+        if: github.event.schedule == '15 1 * * 1-5' || github.event.schedule == '45 5 * * 1-5' || github.event_name == 'workflow_dispatch'
+        env:
+          LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN }}
+          USER_ID: ${{ secrets.USER_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python new_ten_thousand_grid.py
