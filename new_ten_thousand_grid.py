@@ -23,7 +23,7 @@ def check_trend(df):
     return "🟡 區間震盪 (網格套利機會)"
 
 def run_unified_experiment():
-    # ✅ 統一環境變數名稱，改用 Messaging API 規格
+    # ✅ 統一環境變數名稱
     line_token = os.environ.get('LINE_ACCESS_TOKEN')
     user_id = os.environ.get('USER_ID')
     
@@ -31,51 +31,50 @@ def run_unified_experiment():
     report += "----------------------------"
 
     for symbol, cfg in TARGETS.items():
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period="60d").ffill()
-        curr_p = df['Close'].iloc[-1]
-        
-        # 1. 多空診斷
-        trend_status = check_trend(df)
-        
-        # 2. 技術指標計算 (餵給 AI)
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rsi = 100 - (100 / (1 + (gain / loss).iloc[-1]))
-        bias_5 = ((curr_p - df['Close'].rolling(5).mean().iloc[-1]) / df['Close'].rolling(5).mean().iloc[-1]) * 100
-        
-        # 3. 呼叫更新後的 AI.py 進行點評
-        summary = f"現價:{curr_p:.2f}, RSI:{rsi:.1f}, 5日乖離:{bias_5:.2f}%, 盤勢:{trend_status}"
-        ai_comment = get_ai_point(summary, cfg['name'])
-        
-        # 4. 網格建議 (國泰 1 元手續費優化)
-        trade_shares = int((cfg["cap"] / 5) / curr_p)
-        
-        report += f"\n\n📍 {cfg['name']}\n📊 指標: {summary}"
-        report += f"\n🛡️ 診斷: {trend_status}"
-        report += f"\n🧠 AI 專家: {ai_comment}"
-        
-        if "🔴" in trend_status and bias_5 > -2.5:
-            report += f"\n🚫 [行動] 空頭回檔中，暫緩加碼以防虧損。"
-        else:
-            report += f"\n✅ [行動] 建議單筆網格交易 {trade_shares} 股。"
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period="60d").ffill()
+            if df.empty: continue
+            
+            curr_p = df['Close'].iloc[-1]
+            trend_status = check_trend(df)
+            
+            # 2. 技術指標計算 (優化 RSI 穩定性)
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            # 避免除以零
+            rs = gain / loss.replace(0, 1e-6)
+            rsi = 100 - (100 / (1 + rs.iloc[-1]))
+            
+            bias_5 = ((curr_p - df['Close'].rolling(5).mean().iloc[-1]) / df['Close'].rolling(5).mean().iloc[-1]) * 100
+            
+            # 3. 呼叫更新後的 AI.py 進行點評
+            summary = f"現價:{curr_p:.2f}, RSI:{rsi:.1f}, 5日乖離:{bias_5:.2f}%, 盤勢:{trend_status}"
+            ai_comment = get_ai_point(summary, cfg['name'])
+            
+            # 4. 網格建議
+            trade_shares = int((cfg["cap"] / 5) / curr_p)
+            
+            report += f"\n\n📍 {cfg['name']}\n📊 指標: {summary}"
+            report += f"\n🛡️ 診斷: {trend_status}"
+            report += f"\n🧠 AI 專家: {ai_comment}"
+            
+            if "🔴" in trend_status and bias_5 > -2.5:
+                report += f"\n🚫 [行動] 空頭回檔中，暫緩加碼。"
+            else:
+                report += f"\n✅ [行動] 建議單筆網格交易 {trade_shares} 股。"
+        except Exception as e:
+            report += f"\n\n📍 {cfg['name']} 數據抓取失敗: {str(e)[:20]}"
 
-    # ✅ 修正發送邏輯：使用 Messaging API Push Message
+    # ✅ 修正發送邏輯
     if line_token and user_id:
         url = "https://api.line.me/v2/bot/message/push"
-        headers = {
-            "Authorization": f"Bearer {line_token}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "to": user_id,
-            "messages": [{"type": "text", "text": report}]
-        }
+        headers = {"Authorization": f"Bearer {line_token}", "Content-Type": "application/json"}
+        payload = {"to": user_id, "messages": [{"type": "text", "text": report}]}
         res = requests.post(url, headers=headers, json=payload)
-        print(f"網格戰報發送狀態: {res.status_code}")
-    else:
-        print("❌ 錯誤：缺少 LINE_ACCESS_TOKEN 或 USER_ID")
+        return f"萬元實驗發送狀態: {res.status_code}"
+    return "❌ 萬元實驗缺少 Token 或 USER_ID"
 
 if __name__ == "__main__":
-    run_unified_experiment()
+    print(run_unified_experiment())
