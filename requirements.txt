@@ -1,24 +1,2 @@
-# Flask Web + REST API
-flask==3.0.3
-requests==2.32.3
-
-# Discord Bot
-discord.py==2.4.0
-
-# 爬蟲與自動化
-pyppeteer==1.0.2
-websockets==10.4
-pyee==8.2.2
-
-# 系統與加密支援
-cryptography==43.0.3
-asyncio==3.4.3
-
-# JSON / 資料處理
-ujson==5.10.0
-
-# 時區、日期處理
-python-dateutil==2.9.0.post0
-
-# 防止 Render Chrome 啟動錯誤
-typing-extensions==4.12.2
+requests
+yfinance
