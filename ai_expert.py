@@ -5,8 +5,8 @@ def get_ai_point(summary, target_name, extra_data=None):
     gemini_key = os.environ.get('GEMINI_API_KEY')
     if not gemini_key: return "❌ Secret 錯誤"
 
-    # 💡 僅修改此處：對接您列表中的正式模型名稱 (原 gemini-3-pro-preview 會導致 404)
-    model_name = "gemini-3-flash-preview" 
+    # 💡 核心必要修改：改用配額最穩定的正式版模型，解決 "Exceeded Quota" 報錯
+    model_name = "gemini-2.0-flash" 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
     
     # 💡 以下邏輯完全保留您的原始設計
