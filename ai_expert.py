@@ -90,32 +90,35 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
     ai_result = {"decision": "ERROR", "confidence": 0, "reason": "未呼叫 API"}
     for attempt in range(2):
         try:
-            res = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}",
-                json=payload,
-                timeout=30
-            )
+            # 修正 1：改用 v1 穩定版介面，並確認 gemini_key 來源
+            api_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+            
+            res = requests.post(api_url, json=payload, timeout=30)
             res.raise_for_status()
             data = res.json()
+            
+            # 修正 2：增加解析安全性，過濾 Gemini 可能帶有的 Markdown 標籤
             text = data["candidates"][0]["content"]["parts"][0]["text"]
-            ai_result = json.loads(text)
+            clean_text = text.replace("```json", "").replace("```", "").strip()
+            ai_result = json.loads(clean_text)
             break
+            
         except requests.exceptions.HTTPError as e:
             if res.status_code == 429:
                 print("⚠️ AI API 限流，等待 20 秒後重試...")
                 time.sleep(20)
             else:
-                ai_result = {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
+                ai_result = {"decision": "ERROR", "confidence": 0, "reason": f"HTTP {res.status_code}"}
                 break
         except Exception as e:
-            ai_result = {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
+            ai_result = {"decision": "ERROR", "confidence": 0, "reason": f"解析失敗: {str(e)[:20]}"}
             break
 
     # 更新 Cache
     AI_CACHE[key] = ai_result
     AI_LAST_CALL[key] = now
 
-    print(f"🤖 台股 AI ({target_name}): {ai_result}")
+    print(f"🤖 AI 判斷 ({target_name}): {ai_result}")
     return ai_result
 
 
