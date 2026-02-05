@@ -2,7 +2,7 @@ import yfinance as yf
 import requests
 import os
 import pandas as pd
-import time  # 💡 核心修正：引入 time
+import time 
 from datetime import datetime, timezone, timedelta
 from ai_expert import get_ai_point
 from data_engine import get_high_level_insight 
@@ -29,19 +29,16 @@ def run_unified_experiment():
     line_token = os.environ.get('LINE_ACCESS_TOKEN')
     user_id = os.environ.get('USER_ID')
     
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
-
+    # 💡 核心必要修改：移除自定義 Session，解決 curl_cffi 報錯
     now_tw = datetime.now(timezone(timedelta(hours=8)))
     report = f"🦅 經理人「萬元實驗」精準診斷\n日期: {now_tw.strftime('%Y-%m-%d %H:%M')}\n"
     report += "----------------------------"
 
     for symbol, cfg in TARGETS.items():
         try:
-            ticker = yf.Ticker(symbol, session=session)
-            df = ticker.history(period="60d", timeout=10).ffill()
+            # 💡 核心必要修改：不傳入 session，讓 yf 自動處理
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period="60d", timeout=15).ffill()
             
             if df.empty or len(df) < 14: 
                 report += f"\n\n📍 {cfg['name']}\n⚠️ 報價數據獲取失敗"
@@ -66,7 +63,7 @@ def run_unified_experiment():
             summary = f"現價:{curr_p:.2f}, RSI:{rsi:.1f}, 5日乖離:{bias_5:.2f}%, 趨勢:{trend_status}"
             ai_comment = get_ai_point(summary, cfg['name'], extra_data)
             
-            # 💡 核心修正：每診斷完一個標的，強制冷卻 5 秒，防止觸發 AI Quota 限流
+            # 💡 保持現狀：每診斷完一個標的，強制冷卻 5 秒
             time.sleep(5) 
             
             trade_shares = int((cfg["cap"] / 5) / curr_p)
