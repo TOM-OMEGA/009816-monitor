@@ -22,7 +22,7 @@ def get_now_tw():
 
 def is_market_open():
     now_tw = get_now_tw()
-    if now_tw.weekday() >= 5: 
+    if now_tw.weekday() >= 5:
         return False
     return 9 <= now_tw.hour <= 13
 
@@ -37,7 +37,7 @@ def master_monitor_loop():
             now_tw = get_now_tw()
             if is_market_open():
                 print(f"--- 執行全面巡檢 {now_tw.strftime('%H:%M')} ---")
-                
+
                 # === 1️⃣ 存股009816 AI判斷 ===
                 print("🦅 執行 009816 存股判斷...")
                 run_009816_monitor()
@@ -66,6 +66,7 @@ def home():
 def trigger_us_post_market():
     """手動觸發美股盤後分析"""
     try:
+        print("🚀 手動觸發美股盤後分析...")
         run_us_post_market()
         return "美股盤後分析已執行 ✅"
     except Exception as e:
@@ -81,6 +82,12 @@ if __name__ == "__main__":
         # 啟動美股盤後分析排程
         t2 = threading.Thread(target=schedule_job, daemon=True)
         t2.start()
+
+        # 測試模式：啟動時立即推播一次
+        TEST_MODE = True
+        if TEST_MODE:
+            print("🚀 測試模式啟動：立即執行美股盤後分析並推播 LINE")
+            run_us_post_market()
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
