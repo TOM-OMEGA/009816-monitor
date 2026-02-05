@@ -1,13 +1,17 @@
 import os
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
+# 請確保在 Render 的 Environment Variables 設定此變數
 FINMIND_TOKEN = os.environ.get('FINMIND_TOKEN')
 
 def get_fm_data(dataset, stock_id, days=30):
-    """通用的 FinMind 數據抓取工具 (維持經理人架構)"""
-    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    """通用的 FinMind 數據抓取工具 (加入超時保護)"""
+    # 修正 DeprecationWarning: 使用 timezone-aware 物件
+    now_utc = datetime.now(timezone.utc)
+    start_date = (now_utc - timedelta(days=days)).strftime('%Y-%m-%d')
+    
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {
         "dataset": dataset,
@@ -16,7 +20,8 @@ def get_fm_data(dataset, stock_id, days=30):
         "token": FINMIND_TOKEN
     }
     try:
-        res = requests.get(url, params=params)
+        # 加入 timeout=10，防止開盤數據量大時卡死導致整個戰報發不出來
+        res = requests.get(url, params=params, timeout=10)
         return pd.DataFrame(res.json()['data'])
     except:
         return pd.DataFrame()
@@ -54,6 +59,7 @@ def get_high_level_insight(symbol):
     df_day = get_fm_data("TaiwanStockDayTrading", stock_id, days=7)
 
     # --- 數據封裝 (供 AI 診斷) ---
+    # 增加判斷 logic，避免 df.empty 造成 iloc 報錯而中斷發信
     return {
         # 基礎量價
         "k_line": f"收{df_price.iloc[-1]['close']} 量的{df_price.iloc[-1]['Trading_Volume']}" if not df_price.empty else "N/A",
@@ -72,8 +78,8 @@ def get_high_level_insight(symbol):
         # 籌碼面 (當沖、法人、營收、大戶已包含在原邏輯)
         "day_trade": f"當沖率:{df_day.iloc[-1]['day_trading_purchase_amount_percent']}%" if not df_day.empty else "N/A",
         
-        # 保留經理人原有回傳項 (法人、營收、大戶)
-        "inst": "同步抓取中...", # 承接原有的法人邏輯
-        "rev": "同步計算中...",  # 承接原有的營收邏輯
-        "holders": "同步追蹤中..." # 承接原有的大戶邏輯
+        # 保留經理人原有回傳項 (建議後續將法人、營收、大戶抓取 logic 寫入此處)
+        "inst": "同步抓取中...", 
+        "rev": "同步計算中...",  
+        "holders": "同步追蹤中..." 
     }
