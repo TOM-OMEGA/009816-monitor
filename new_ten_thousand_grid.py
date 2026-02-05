@@ -2,6 +2,7 @@ import yfinance as yf
 import requests
 import os
 import pandas as pd
+import time  # 💡 核心修正：引入 time
 from datetime import datetime, timezone, timedelta
 from ai_expert import get_ai_point
 from data_engine import get_high_level_insight 
@@ -28,7 +29,6 @@ def run_unified_experiment():
     line_token = os.environ.get('LINE_ACCESS_TOKEN')
     user_id = os.environ.get('USER_ID')
     
-    # 💡 建立 Session 偽裝 Header，確保多標的抓取時不會被 Yahoo 封鎖
     session = requests.Session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -40,7 +40,6 @@ def run_unified_experiment():
 
     for symbol, cfg in TARGETS.items():
         try:
-            # A. 抓取技術面數據 (加入 Session 與 Timeout)
             ticker = yf.Ticker(symbol, session=session)
             df = ticker.history(period="60d", timeout=10).ffill()
             
@@ -51,7 +50,6 @@ def run_unified_experiment():
             curr_p = df['Close'].iloc[-1]
             trend_status = check_trend(df)
             
-            # RSI 計算
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -61,15 +59,16 @@ def run_unified_experiment():
             ma5 = df['Close'].rolling(5).mean().iloc[-1]
             bias_5 = ((curr_p - ma5) / ma5) * 100
             
-            # B. 抓取 FinMind 全維度數據
             print(f"📡 獲取 {cfg['name']} 精準籌碼與盤中數據...")
             extra_data = get_high_level_insight(symbol)
             
-            # C. 呼叫 AI (Gemini 3 Flash 會處理這部分的診斷)
+            # C. 呼叫 AI
             summary = f"現價:{curr_p:.2f}, RSI:{rsi:.1f}, 5日乖離:{bias_5:.2f}%, 趨勢:{trend_status}"
             ai_comment = get_ai_point(summary, cfg['name'], extra_data)
             
-            # D. 網格交易決策
+            # 💡 核心修正：每診斷完一個標的，強制冷卻 5 秒，防止觸發 AI Quota 限流
+            time.sleep(5) 
+            
             trade_shares = int((cfg["cap"] / 5) / curr_p)
             
             report += f"\n\n📍 {cfg['name']}"
@@ -77,7 +76,6 @@ def run_unified_experiment():
             report += f"\n📉 力道: {extra_data.get('order_strength', '穩定')}"
             report += f"\n🧠 AI 診斷: {ai_comment}"
             
-            # 邏輯鎖：若空頭且盤中賣壓重，建議審慎
             if "🔴" in trend_status and "賣單" in extra_data.get('order_strength', ''):
                 report += f"\n🚫 [行動] 趨勢偏空且力道轉弱，暫緩補貨。"
             else:
@@ -87,7 +85,6 @@ def run_unified_experiment():
             print(f"❌ {cfg['name']} 診斷出錯: {e}")
             report += f"\n\n📍 {cfg['name']} 診斷暫時中斷"
 
-    # ✅ Line 發送邏輯
     if line_token and user_id:
         url = "https://api.line.me/v2/bot/message/push"
         headers = {"Authorization": f"Bearer {line_token}", "Content-Type": "application/json"}
