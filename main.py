@@ -5,7 +5,7 @@ import threading
 from flask import Flask
 from datetime import datetime, timedelta, timezone
 
-# 路徑強化，確保 Render 抓到模組
+# 路徑強化，確保模組能抓到
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
@@ -20,37 +20,36 @@ def get_now_tw():
     return datetime.now(timezone(timedelta(hours=8)))
 
 def is_market_open():
-    """判斷是否為交易日 9:00-13:00"""
     now_tw = get_now_tw()
-    if now_tw.weekday() >= 5:
+    if now_tw.weekday() >= 5: 
         return False
     return 9 <= now_tw.hour <= 13
 
 def master_monitor_loop():
+    """中央監控線程：存股 + 網格 AI 判斷"""
     print("🤖 中央監控系統啟動：全量巡檢模式...")
-    # 初始冷卻，避開 API 高峰
-    time.sleep(5)
+    time.sleep(20)  # 啟動冷卻，避開 API 巔峰
 
     while True:
         try:
             now_tw = get_now_tw()
             if is_market_open():
-                print(f"--- 執行全面巡檢 {now_tw.strftime('%Y-%m-%d %H:%M')} ---")
-
-                # 1️⃣ 009816 存股監控（每月一次）
+                print(f"--- 執行全面巡檢 {now_tw.strftime('%H:%M')} ---")
+                
+                # === 1️⃣ 存股009816 AI判斷 ===
+                print("🦅 執行 009816 存股判斷...")
                 run_009816_monitor()
-                time.sleep(10)  # 避免秒刷 AI
+                time.sleep(60)  # 確保 AI 配額安全
 
-                # 2️⃣ 萬元網格模擬（可每盤中執行）
-                print("📊 執行萬元網格實驗模擬...")
+                # === 2️⃣ 一萬元網格實驗 ===
+                print("📊 執行萬元網格 AI 實驗...")
                 run_unified_experiment()
+                time.sleep(240)  # 總循環 5 分鐘，扣除上方等待
 
-                # 總循環 300 秒（5分鐘）
-                time.sleep(300)
             else:
                 print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，監控暫停中...")
-                # 非交易日休息 30 分鐘
-                time.sleep(1800)
+                time.sleep(1800)  # 非交易日/時段休眠 30 分鐘
+
         except Exception as e:
             print(f"⚠️ 中央監控異常: {e}")
             time.sleep(60)
@@ -58,7 +57,7 @@ def master_monitor_loop():
 @app.route('/')
 def home():
     now_tw = get_now_tw()
-    return f"<h1>🦅 經理人全面監控中</h1><p>時間：{now_tw.strftime('%Y-%m-%d %H:%M:%S')}</p>"
+    return f"<h1>🦅 經理人全面監控中</h1><p>時間：{now_tw.strftime('%H:%M:%S')}</p>"
 
 if __name__ == "__main__":
     # 💡 防止 Flask 重複啟動執行緒
@@ -66,7 +65,6 @@ if __name__ == "__main__":
         t = threading.Thread(target=master_monitor_loop)
         t.daemon = True
         t.start()
-
+    
     port = int(os.environ.get("PORT", 10000))
-    # 💡 關閉 reloader 確保只有一個執行緒在跑
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
