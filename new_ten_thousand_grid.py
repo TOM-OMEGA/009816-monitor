@@ -2,7 +2,6 @@ import yfinance as yf
 import requests
 import os
 import json
-import time
 from datetime import datetime, timezone, timedelta
 from ai_expert import get_ai_point
 from data_engine import get_high_level_insight
@@ -54,10 +53,10 @@ def hard_grid_gate(price, extra, trend):
     return True, "風控通過"
 
 # === 網格策略主程式 ===
-def run_unified_grid():
+def run_unified_experiment():
     ledger = load_ledger()
     now_tw = datetime.now(timezone(timedelta(hours=8)))
-    report = f"🦅 AI 網格實驗報告 {now_tw.strftime('%Y-%m-%d %H:%M')}\n---------------------"
+    report_lines = [f"🦅 AI 網格實驗報告 {now_tw.strftime('%Y-%m-%d %H:%M')}", "---------------------"]
 
     for symbol, cfg in TARGETS.items():
         try:
@@ -73,7 +72,7 @@ def run_unified_grid():
             gain = delta.where(delta>0,0).rolling(14).mean()
             loss = -delta.where(delta<0,0).rolling(14).mean()
             rs = gain / loss.replace(0,1e-6)
-            rsi = 100 - (100 / (1+rs.iloc[-1]))
+            rsi = 100 - (100 / (1+rs.iloc[-1])) if not rs.empty else 50
 
             # 2. 高階數據
             extra = get_high_level_insight(symbol)
@@ -92,7 +91,7 @@ def run_unified_grid():
 
             # 5. 帳本初始化
             book = ledger.get(symbol, {"shares":0,"cost":0.0})
-            report += f"\n\n📍 {cfg['name']}\n💵 現價:{price:.2f}\n📊 趨勢:{trend}\n🧠 AI:{ai_result}"
+            report_lines.append(f"\n📍 {cfg['name']}\n💵 現價:{price:.2f}\n📊 趨勢:{trend}\n🧠 AI:{ai_result}")
 
             # 6. 決定是否買入
             if ai_action=="BUY" and gate_ok:
@@ -102,9 +101,9 @@ def run_unified_grid():
                     cost = buy_shares*price
                     book["shares"] += buy_shares
                     book["cost"] += cost
-                    report += f"\n✅ 買入 {buy_shares} 股"
+                    report_lines.append(f"✅ 買入 {buy_shares} 股")
             else:
-                report += f"\n🚫 暫停（{gate_reason if ai_action=='BUY' else 'AI未授權'}）"
+                report_lines.append(f"🚫 暫停（{gate_reason if ai_action=='BUY' else 'AI未授權'}）")
 
             ledger[symbol] = book
 
@@ -113,24 +112,27 @@ def run_unified_grid():
                 avg_cost = book["cost"]/book["shares"]
                 pnl = (price-avg_cost)*book["shares"]
                 roi = pnl/book["cost"]*100
-                report += f"\n📒 持股:{book['shares']} 成本:{avg_cost:.2f} 損益:{pnl:.0f} ({roi:.2f}%)"
+                report_lines.append(f"📒 持股:{book['shares']} 成本:{avg_cost:.2f} 損益:{pnl:.0f} ({roi:.2f}%)")
 
             # 8. 紀錄決策
             log_decision(symbol, price, ai_result, (gate_ok, gate_reason))
 
         except Exception as e:
-            report += f"\n❌ {cfg['name']} 發生錯誤: {e}"
+            report_lines.append(f"\n❌ {cfg['name']} 發生錯誤: {e}")
 
     save_ledger(ledger)
 
-    # 9. LINE 推播
+    # 9. LINE 推播（自動分段，避免截斷）
     if LINE_TOKEN and USER_ID:
         try:
-            url = "https://api.line.me/v2/bot/message/push"
-            headers = {"Authorization": f"Bearer {LINE_TOKEN}","Content-Type":"application/json"}
-            payload = {"to": USER_ID,"messages":[{"type":"text","text":report}]}
-            requests.post(url, headers=headers, json=payload, timeout=10)
+            max_len = 1000
+            for i in range(0, len(report_lines), 20):
+                chunk = "\n".join(report_lines[i:i+20])
+                url = "https://api.line.me/v2/bot/message/push"
+                headers = {"Authorization": f"Bearer {LINE_TOKEN}","Content-Type":"application/json"}
+                payload = {"to": USER_ID,"messages":[{"type":"text","text":chunk}]}
+                requests.post(url, headers=headers, json=payload, timeout=10)
         except Exception as e:
             print(f"⚠️ Line 推播失敗: {e}")
 
-    return report
+    return "\n".join(report_lines)
