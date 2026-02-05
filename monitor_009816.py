@@ -9,31 +9,21 @@ LINE_TOKEN = os.environ.get('LINE_ACCESS_TOKEN')
 USER_ID = os.environ.get('USER_ID')
 
 def get_realtime_data(ticker):
-    """移除 Session 以解決 curl_cffi 報錯，並強化快取報價抓取"""
-    print(f"🔍 索取 {ticker} 即時報價...")
+    print(f"🔍 索取 {ticker} 最新成交價...")
     try:
-        # 💡 核心必要修改：移除自定義 Session，直接使用 yf.Ticker
         t = yf.Ticker(ticker)
+        # 💡 核心修正：強制抓取最新的 fast_info，這通常比 history 更接近網頁即時報價
+        curr = t.basic_info.last_price 
         
-        # 💡 修改 1: 優先嘗試 fast_info 獲取快取成交價，避開 history 的 K 線限制
-        curr = float(t.fast_info.get('lastPrice', 0.0))
+        # 漲跌幅計算改用 basic_info 的昨日結算價
+        prev = t.basic_info.regular_market_previous_close
+        pct = ((curr / prev) - 1) * 100 if prev else 0.0
         
-        # 💡 修改 2: 若快取無效，則嘗試 history 1d
-        if curr <= 0:
-            df = t.history(period="1d", timeout=10) 
-            if not df.empty:
-                curr = float(df['Close'].iloc[-1])
-            
         if curr > 0:
-            # 取得昨收計算漲跌幅 (pct)
-            prev = t.info.get('previousClose', curr)
-            pct = ((curr / prev) - 1) * 100 if prev != 0 else 0.0
-            print(f"✅ {ticker} 準確報價: {curr:.2f}")
+            print(f"✅ {ticker} 盤中最新價: {curr:.2f}")
             return curr, pct
-            
         return 0.0, 0.0
-    except Exception as e:
-        print(f"⚠️ yfinance 抓取異常: {e}")
+    except:
         return 0.0, 0.0
 
 def run_009816_monitor():
