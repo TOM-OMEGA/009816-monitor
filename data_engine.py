@@ -1,6 +1,7 @@
 import os
 import requests
 import pandas as pd
+import time
 from datetime import datetime, timedelta, timezone
 
 def get_fm_data(dataset, stock_id, days=1):
@@ -32,22 +33,24 @@ def get_fm_data(dataset, stock_id, days=1):
         return pd.DataFrame()
 
 def get_high_level_insight(symbol):
-    """11維數據對接 (效能優化版)"""
     stock_id = symbol.replace(".TW", "")
     print(f"📊 引擎正在分析 {symbol} 關鍵指標...")
 
-    # 1. 基礎價量 (縮減天數)
+    # 1. 基礎價量
     df_price = get_fm_data("TaiwanStockPrice", stock_id, days=3)
+    time.sleep(1) # 💡 讓 FinMind 喘口氣
     
-    # 2. 價值位階 (PER/PBR)
+    # 2. 價值位階
     df_per = get_fm_data("TaiwanStockPER", stock_id, days=5)
+    time.sleep(1) # 💡 緩衝
     
-    # 3. 盤中力道 (💡 修改：不抓歷史 Tick，改抓 Statistics，體積縮小 100 倍)
+    # 3. 盤中力道
     df_stats = get_fm_data("TaiwanStockStatistics", stock_id, days=1)
+    time.sleep(1) # 💡 緩衝
     
     # 4. 大盤環境
     df_index = get_fm_data("TaiwanStockIndex", "TAIEX", days=2)
-
+    
     # 安全提取數據
     insight = {
         "k_line": f"收{df_price.iloc[-1]['close']} 量{df_price.iloc[-1]['Trading_Volume']}" if not df_price.empty else "N/A",
