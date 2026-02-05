@@ -4,15 +4,18 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta, timezone
 import requests
-import io
-import base64
-import schedule
-import time
 import pandas as pd
 
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
 USER_ID = os.environ.get("USER_ID")
-TARGETS = ["SPY", "TSM"]
+
+# ===== 目標股票/指數 =====
+TARGETS = ["^GSPC", "^DJI", "^IXIC", "TSM"]
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+PLOT_FILE = os.path.join(STATIC_DIR, "plot.png")
+
+os.makedirs(STATIC_DIR, exist_ok=True)
 
 # ==== 資料抓取 ====
 def fetch_data(symbol, period="30d"):
@@ -31,7 +34,7 @@ def compute_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# ==== 計算反彈/下跌機率 ====
+# ==== 反彈/下跌機率 ====
 def rebound_probability(df):
     rsi = compute_rsi(df['Close'])
     latest_rsi = rsi.iloc[-1] if not rsi.empty else 50
@@ -39,7 +42,7 @@ def rebound_probability(df):
     drop = max(0, min(100, latest_rsi))
     return latest_rsi, rebound, drop
 
-# ==== 前 3 日趨勢 + 反彈動能 ====
+# ==== 前 3 日趨勢分數 ====
 def recent_trend_score(df):
     if len(df) < 4:
         return 0,0
@@ -51,9 +54,9 @@ def recent_trend_score(df):
     drop_score = min(100, down_days*33)
     return rebound_score, drop_score
 
-# ==== 圖表生成（收盤價 + 連續三日漲跌 + RSI） ====
+# ==== 圖表生成 ====
 def plot_chart(dfs):
-    plt.figure(figsize=(10,6))
+    plt.figure(figsize=(12,6))
     for symbol, df in dfs.items():
         df = df.copy()
         df['pct_change'] = df['Close'].pct_change()*100
@@ -61,17 +64,15 @@ def plot_chart(dfs):
         plt.plot(df.index, df['Close'], label=f"{symbol} 收盤價")
         plt.plot(df.index[-4:], df['pct_change'].iloc[-4:], linestyle='--', marker='o', label=f"{symbol} 連續3日漲跌%")
         plt.plot(df.index, df['RSI'], linestyle=':', label=f"{symbol} RSI")
-    plt.title("美股收盤後分析")
+    plt.title("美股盤後分析")
     plt.xlabel("日期")
     plt.ylabel("價格 / 漲跌% / RSI")
     plt.legend()
     plt.tight_layout()
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-    img_base64 = base64.b64encode(buf.read()).decode("utf-8")
+    plt.savefig(PLOT_FILE)
     plt.close()
-    return img_base64
+    print(f"🖼 圖表已存至 {PLOT_FILE}")
+    return PLOT_FILE
 
 # ==== 文字報告 ====
 def generate_report(dfs):
@@ -97,61 +98,52 @@ def generate_report(dfs):
     return report
 
 # ==== LINE 推播 ====
-def push_line(report, img_base64=None):
+def push_line(report, plot_path=None):
     if not LINE_TOKEN or not USER_ID:
         print("⚠️ LINE TOKEN 或 USER ID 未設定")
-        return False
+        return
 
     headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
 
-    # 先推文字
+    # 文字推播
     payload_text = {"to": USER_ID, "messages":[{"type":"text","text":report}]}
     try:
-        res_text = requests.post("https://api.line.me/v2/bot/message/push",
-                                 headers=headers, json=payload_text, timeout=10)
-        if res_text.status_code == 200:
-            print("✅ LINE 文字推播成功")
-        else:
-            print(f"⚠️ LINE 文字推播失敗: {res_text.status_code}, {res_text.text}")
+        res_text = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload_text, timeout=10)
+        print(f"📊 LINE 文字推播結果: {res_text.status_code}")
     except Exception as e:
-        print(f"⚠️ LINE 文字推播例外: {e}")
+        print(f"⚠️ LINE 文字推播失敗: {e}")
 
-    # 再推圖
-    if img_base64:
-        payload_img = {
-            "to": USER_ID,
-            "messages":[
-                {"type":"image",
-                 "originalContentUrl": f"data:image/png;base64,{img_base64}",
-                 "previewImageUrl": f"data:image/png;base64,{img_base64}"}
-            ]
-        }
+    # 圖片推播
+    if plot_path:
+        base_url = os.environ.get("RENDER_EXTERNAL_URL")
+        if not base_url:
+            print("⚠️ 無法取得公開 URL，圖片無法推播")
+            return
+        plot_url = f"{base_url}/static/plot.png"
+        payload_img = {"to": USER_ID, "messages":[{"type":"image","originalContentUrl":plot_url,"previewImageUrl":plot_url}]}
         try:
-            res_img = requests.post("https://api.line.me/v2/bot/message/push",
-                                    headers=headers, json=payload_img, timeout=10)
-            if res_img.status_code == 200:
-                print("✅ LINE 圖片推播成功")
-            else:
-                print(f"⚠️ LINE 圖片推播失敗: {res_img.status_code}, {res_img.text}")
+            res_img = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload_img, timeout=10)
+            print(f"📊 LINE 圖片推播結果: {res_img.status_code}")
         except Exception as e:
-            print(f"⚠️ LINE 圖片推播例外: {e}")
+            print(f"⚠️ LINE 圖片推播失敗: {e}")
 
 # ==== 主程式 ====
 def run_us_post_market():
     dfs = {symbol: fetch_data(symbol) for symbol in TARGETS}
     report = generate_report(dfs)
-    img_base64 = plot_chart(dfs)
-    push_line(report, img_base64)
-    print("📊 美股盤後分析推播流程完成")
+    plot_path = plot_chart(dfs)
+    push_line(report, plot_path)
 
-# ==== 排程設定 (每天美東時間 16:05 執行) ====
+# ==== 排程設定 ====
 def schedule_job():
+    import schedule, time
     schedule.every().day.at("21:05").do(run_us_post_market)
     print("📅 美股盤後分析排程已啟動，每天美東時間16:05自動執行")
     while True:
         schedule.run_pending()
         time.sleep(30)
 
+# ==== 測試模式 ====
 if __name__ == "__main__":
     TEST_MODE = True
     if TEST_MODE:
