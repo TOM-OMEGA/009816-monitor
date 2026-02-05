@@ -1,22 +1,61 @@
 # us_post_market_robot.py
 import os
+import requests
 import yfinance as yf
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates # 新增：用於優化圖表日期顯示
+import matplotlib.dates as mdates
+import matplotlib.font_manager as fm  # 💡 新增：字體管理器
 from datetime import datetime, timedelta, timezone
-import requests
 import pandas as pd
-import numpy as np # 新增 numpy 處理可能的計算問題
+import numpy as np
 
-# 解決 matplotlib 中文顯示問題 (如果你的環境無法顯示中文，請註解掉這兩行)
-plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei'] # windows 適用
-plt.rcParams['axes.unicode_minus'] = False
+# ==== 解決 Linux/Render 中文亂碼的終極方案 ====
+def setup_chinese_font():
+    """
+    自動檢測並下載開源中文字體 (Noto Sans TC)，
+    解決 Linux (Render) 環境下 Matplotlib 無法顯示中文的問題。
+    """
+    # 1. 設定字體檔案存放路徑 (放在 static 資料夾下)
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    os.makedirs(static_dir, exist_ok=True)
+    font_path = os.path.join(static_dir, "NotoSansTC-Regular.otf")
+    
+    # 2. 如果字體不存在，從 Google Fonts GitHub 下載
+    if not os.path.exists(font_path):
+        print("⚠️ 檢測到缺少中文字體，正在下載 NotoSansTC...")
+        url = "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
+        try:
+            r = requests.get(url, timeout=30)
+            with open(font_path, 'wb') as f:
+                f.write(r.content)
+            print("✅ 字體下載完成！")
+        except Exception as e:
+            print(f"❌ 字體下載失敗: {e} (將使用預設字體，中文可能亂碼)")
+            return None
+
+    # 3. 強制加入 Matplotlib 字體管理器
+    try:
+        fm.fontManager.addfont(font_path)
+        # 取得該字體的內部名稱
+        font_prop = fm.FontProperties(fname=font_path)
+        font_name = font_prop.get_name()
+        
+        # 4. 設定全域預設字體
+        plt.rcParams['font.family'] = font_name
+        plt.rcParams['axes.unicode_minus'] = False # 解決負號顯示問題
+        print(f"✅ 已成功設定中文字體: {font_name}")
+        return font_name
+    except Exception as e:
+        print(f"⚠️ 字體載入異常: {e}")
+        return None
+
+# 🚀 程式啟動時立即執行字體設定
+setup_chinese_font()
 
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
 USER_ID = os.environ.get("USER_ID")
 
 # ===== 目標股票/指數 =====
-# 建議加入一個對照字典，讓圖表顯示更直覺
 TARGETS_MAP = {
     "^GSPC": "標普500",
     "^DJI": "道瓊工業",
@@ -79,7 +118,7 @@ def recent_trend_score(df):
     drop_score = min(100, down_days * 33)
     return rebound_score, drop_score
 
-# ==== (重點修改) 圖表生成 ====
+# ==== 圖表生成 ====
 def plot_chart(dfs):
     # 創建一個包含 2 個子圖的畫布，共享 X 軸，高度比為 2:1
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
@@ -94,11 +133,9 @@ def plot_chart(dfs):
         label_name = TARGETS_MAP.get(symbol, symbol)
         
         # --- 上圖：收盤價 ---
-        # 如果是不同量級的商品(如道瓊和台積電)，畫在一起其實看不清楚台積電的波動
-        # 這裡示範將它們標準化(以第一天為基準100)來比較走勢幅度，如果你想看絕對價格，請註解掉下面那行並取消註解再下一行
+        # 標準化價格 (以第一天為基準100) 來比較走勢幅度
         normalized_price = (df['Close'] / df['Close'].iloc[0]) * 100
         ax1.plot(df.index, normalized_price, label=label_name, color=color, linewidth=1.5)
-        # ax1.plot(df.index, df['Close'], label=label_name, color=color, linewidth=1.5) # 畫絕對價格
         
         # --- 下圖：RSI ---
         ax2.plot(df.index, df['RSI'], label=label_name, color=color, linewidth=1, linestyle='--')
@@ -106,7 +143,6 @@ def plot_chart(dfs):
     # --- 設定上圖 (價格) ---
     ax1.set_title("美股焦點走勢對比 (近30日)", fontsize=14, fontweight='bold')
     ax1.set_ylabel("標準化價格 (起始日=100)")
-    # ax1.set_ylabel("收盤價 (美元/點數)") # 如果畫絕對價格，請改用這個 Y 軸標籤
     ax1.legend(loc='upper left')
     ax1.grid(True, linestyle='--', alpha=0.6)
     
@@ -114,6 +150,7 @@ def plot_chart(dfs):
     ax2.set_title("相對強弱指標 (RSI 14日)")
     ax2.set_ylabel("RSI 數值 (0-100)")
     ax2.set_ylim(0, 100) # RSI 固定在 0-100 之間
+    
     # 加入 RSI 參考線
     ax2.axhline(70, color='r', linestyle=':', alpha=0.5, label='超買區(70)')
     ax2.axhline(30, color='g', linestyle=':', alpha=0.5, label='超賣區(30)')
@@ -135,7 +172,7 @@ def plot_chart(dfs):
 # ==== 文字報告 ====
 def generate_report(dfs):
     # 獲取美東時間的昨天日期 (因為是盤後分析)
-    us_eastern = timezone(timedelta(hours=-5)) # 標準時間是 -5, 日光節約是 -4，這裡簡化處理
+    us_eastern = timezone(timedelta(hours=-5)) # 標準時間是 -5
     report_date = datetime.now(us_eastern).strftime("%Y-%m-%d")
     
     report = f"🦅 美股盤後快報 [{report_date}]\n"
@@ -208,7 +245,6 @@ def push_line(report, plot_path=None):
         base_url = os.environ.get("RENDER_EXTERNAL_URL") 
         if not base_url:
             print("ℹ️ 本地測試模式：無法取得公開 URL，跳過圖片推播 (僅儲存圖片)")
-            # 如果你在本地測試，可以考慮用 imgur API 上傳圖片獲取連結，這裡暫不實作
             return
             
         # 在 URL 後面加上時間戳記，強制 LINE 重新讀取圖片，避免快取舊圖
@@ -222,7 +258,6 @@ def push_line(report, plot_path=None):
             if res_img.status_code == 200:
                 print(f"✅ LINE 圖片推播成功")
             else:
-                # 常見錯誤是 URL 無法公開訪問或圖片太大
                 print(f"⚠️ LINE 圖片推播失敗 (請檢查 URL 是否公開): {res_img.text}")
         except Exception as e:
             print(f"⚠️ LINE 圖片推播錯誤: {e}")
@@ -253,8 +288,7 @@ def schedule_job():
     import schedule
     import time
     # 設定美東時間下午 4:05 (收盤後)執行。
-    # 需注意你的伺服器時區設定，如果伺服器是 UTC，美東 16:05 大約是 UTC 20:05 或 21:05
-    # 這裡暫定為台灣時間早上 5:05 (夏令) 或 6:05 (冬令) 比較保險
+    # 這裡暫定為台灣時間早上 05:05 (因時差關係)
     run_time_tw = "05:05" 
     schedule.every().day.at(run_time_tw).do(run_us_post_market)
     print(f"📅 排程已啟動，預計每天台灣時間 {run_time_tw} 執行")
@@ -272,7 +306,6 @@ if __name__ == "__main__":
     # 檢查是否有必要的環境變數
     if not LINE_TOKEN:
          print("⚠️ 警告: 未設定 LINE_ACCESS_TOKEN，將無法發送訊息。")
-         # TEST_MODE = False # 強制不執行測試
 
     if TEST_MODE:
         print("🚀 === 啟動測試模式 (立即執行一次) ===")
