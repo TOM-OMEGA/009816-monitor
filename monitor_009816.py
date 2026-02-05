@@ -28,40 +28,70 @@ def get_realtime_data(ticker):
 
 def run_009816_monitor():
     print("\n" + "=" * 30)
-    print("🦅 啟動 009816 AI 決策監控")
+    print("🦅 啟動 009816 AI 月底低點判斷")
 
-    # === 1. 報價 ===
+    # === 1. 即時報價 ===
     price_00, pct_00 = get_realtime_data("009816.TW")
     _, sox_pct = get_realtime_data("^SOX")
     _, tsm_pct = get_realtime_data("TSM")
 
-    # === 2. 籌碼 / 盤中數據 ===
-    print("📡 取得 FinMind 全維度數據...")
+    # === 2. 取得高階數據 ===
     extra_data = get_high_level_insight("009816.TW")
 
-    # === 3. AI 判斷（核心）===
-    summary_override = (
-        f"009816價:{price_00:.2f} ({pct_00:+.2f}%)\n"
-        f"費半:{sox_pct:+.2f}%, TSM:{tsm_pct:+.2f}%"
-    )
-    ai_result = get_ai_point(extra_data, target_name="009816 結婚基金", summary_override=summary_override)
+    # === 3. 計算本月最高/最低 + RSI + 趨勢 ===
+    df_month = extra_data.get("price_history", None)  # 如果 data_engine.py 有返回歷史價格
+    if df_month is None:
+        import pandas as pd
+        from data_engine import get_fm_data
+        df_month = get_fm_data("TaiwanStockPrice", "009816.TW", days=30)
 
+    month_low = df_month['close'].min() if not df_month.empty else price_00
+    month_high = df_month['close'].max() if not df_month.empty else price_00
+
+    # RSI 計算
+    delta = df_month['close'].diff()
+    gain = delta.where(delta>0, 0).rolling(14).mean()
+    loss = -delta.where(delta<0, 0).rolling(14).mean()
+    rs = gain / loss.replace(0, 1e-6)
+    rsi = 100 - (100 / (1 + rs.iloc[-1])) if not rs.empty else 50
+
+    # 趨勢
+    trend = "未知"
+    if len(df_month) >= 60:
+        ma20 = df_month['close'].rolling(20).mean().iloc[-1]
+        ma60 = df_month['close'].rolling(60).mean().iloc[-1]
+        c = df_month['close'].iloc[-1]
+        if c > ma20 > ma60:
+            trend = "多頭"
+        elif c < ma20 < ma60:
+            trend = "空頭"
+        else:
+            trend = "盤整"
+
+    # === 4. 技術摘要給 AI ===
+    summary_override = (
+        f"現價:{price_00:.2f}, 本月最高:{month_high:.2f}, 本月最低:{month_low:.2f}, RSI:{rsi:.1f}\n"
+        f"趨勢:{trend}, 費半:{sox_pct:+.2f}%, TSM:{tsm_pct:+.2f}%"
+    )
+
+    # === 5. AI 判斷 ===
+    ai_result = get_ai_point(extra_data, target_name="009816 結婚基金", summary_override=summary_override)
     ai_decision = ai_result.get("decision", "觀望")
     ai_conf = ai_result.get("confidence", 0)
     ai_reason = ai_result.get("reason", "N/A")
 
-    # === 4. 硬風控 ===
+    # === 6. 硬風控 ===
     gate_ok, gate_reason = hard_risk_gate(price_00, extra_data)
 
-    # === 5. 最終決策 ===
+    # === 7. 最終決策 ===
     if gate_ok and ai_decision == "可行" and ai_conf >= 60:
-        final_action = "✅【最終決策】AI 判斷可買入"
+        final_action = "✅【建議買入】AI 判斷價格接近本月低點"
     elif not gate_ok:
         final_action = f"⛔【風控封鎖】{gate_reason}"
     else:
         final_action = f"⏸【觀望】AI 判斷 {ai_decision}"
 
-    # === 6. 紀錄決策 ===
+    # === 8. 紀錄決策 ===
     log_decision(
         symbol="009816",
         price=price_00,
@@ -69,15 +99,14 @@ def run_009816_monitor():
         gate_result=(gate_ok, gate_reason)
     )
 
-    # === 7. Line 推播 ===
+    # === 9. Line 推播 ===
     now_tw = datetime.now(timezone(timedelta(hours=8)))
     current_time = now_tw.strftime("%H:%M:%S")
     full_msg = (
-        f"🦅 經理人 AI 決策戰報 ({current_time})\n"
+        f"🦅 經理人 AI 存股提醒 ({current_time})\n"
         f"------------------\n"
-        f"📊 技術摘要: {summary_override}\n"
-        f"📊 評價: {extra_data.get('valuation','N/A')}\n"
-        f"📉 盤中力道: {extra_data.get('order_strength','穩定')}\n"
+        f"現價:{price_00:.2f}, 本月最低:{month_low:.2f}, 本月最高:{month_high:.2f}, RSI:{rsi:.1f}\n"
+        f"趨勢:{trend}\n"
         f"------------------\n"
         f"{final_action}\n"
         f"🤖 AI 信心: {ai_conf}\n"
