@@ -11,7 +11,7 @@ from new_ten_thousand_grid import run_unified_experiment
 app = Flask(__name__)
 
 def get_now_tw():
-    """獲取精準台灣時間，消除 DeprecationWarning"""
+    """獲取精準台灣時間，確保 2026/2027 跨年邏輯正確"""
     return datetime.now(timezone(timedelta(hours=8)))
 
 def is_market_open():
@@ -22,26 +22,33 @@ def is_market_open():
 def master_monitor_loop():
     """主控迴圈：管理所有監控腳本"""
     print("🤖 中央監控系統啟動...")
-    # 啟動時先緩衝 10 秒，確保網路完全連線
-    time.sleep(10)
     
+    # 💡 關鍵修改：部署後「立即執行一次」，不要等 sleep
+    try:
+        if is_market_open():
+            print("🚀 檢測到開盤中，啟動即時首巡...")
+            run_009816_monitor()
+            # 強制補發萬元實驗戰報
+            run_unified_experiment()
+    except Exception as e:
+        print(f"⚠️ 啟動首巡失敗: {e}")
+
     while True:
         try:
             now_tw = get_now_tw()
             if is_market_open():
                 print(f"--- 執行例行巡檢 {now_tw.strftime('%H:%M')} ---")
                 
-                # 1. 每 3 分鐘跑一次核心 009816 監控
-                print(run_009816_monitor())
+                # 1. 核心 009816 監控
+                run_009816_monitor()
                 
-                # 2. 如果是開盤 (09:15-09:20 區間) 或 收盤 (13:45-13:50 區間)
-                # 稍微放寬分鐘區間，避免 time.sleep 剛好跳過觸發點
-                if (now_tw.hour == 9 and 15 <= now_tw.minute <= 20) or \
-                   (now_tw.hour == 13 and 45 <= now_tw.minute <= 50):
+                # 2. 萬元實驗網格 (放寬時間判定，確保 3 分鐘一輪不會漏掉)
+                if (now_tw.hour == 9 and 15 <= now_tw.minute <= 25) or \
+                   (now_tw.hour == 13 and 45 <= now_tw.minute <= 55):
                     print("📊 執行萬元實驗室診斷...")
                     run_unified_experiment()
                 
-                time.sleep(180) # 休息 3 分鐘
+                time.sleep(180) 
             else:
                 print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，監控暫停中...")
                 time.sleep(1800) 
@@ -52,12 +59,14 @@ def master_monitor_loop():
 @app.route('/')
 def home():
     now_tw = get_now_tw()
-    return f"<h1>🦅 經理人中央控制台</h1><p>運行中。目前台灣時間：{now_tw.strftime('%Y-%m-%d %H:%M:%S')}</p>"
+    return f"<h1>🦅 經理人中央控制台</h1><p>系統即時時間：{now_tw.strftime('%Y-%m-%d %H:%M:%S')}</p>"
 
 if __name__ == "__main__":
-    # 啟動背景主控執行緒
-    threading.Thread(target=master_monitor_loop, daemon=True).start()
+    # 啟動背景執行緒
+    t = threading.Thread(target=master_monitor_loop)
+    t.daemon = True
+    t.start()
     
-    # 啟動 Flask 伺服器
+    # 啟動 Flask
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
