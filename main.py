@@ -6,7 +6,6 @@ from flask import Flask
 from datetime import datetime, timedelta, timezone
 
 # 💡 核心必要修改 1：強制將當前腳本目錄加入系統路徑
-# 這能解決 Render 部署時偶發的 ModuleNotFoundError
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
@@ -27,14 +26,12 @@ def get_now_tw():
 def is_market_open():
     now_tw = get_now_tw()
     if now_tw.weekday() >= 5: return False
-    # 💡 修正判斷範圍：包含 13:30 之前的完整交易時段
     return 9 <= now_tw.hour <= 13
 
 def master_monitor_loop():
     """主控迴圈：管理所有監控腳本"""
     print("🤖 中央監控系統啟動...")
     
-    # 💡 核心必要修改 2：首巡增加短暫延遲，避開 Flask 啟動時的資源競爭
     time.sleep(5)
     
     try:
@@ -53,16 +50,18 @@ def master_monitor_loop():
                 # 1. 核心 009816 監控
                 run_009816_monitor()
                 
+                # 💡 核心必要修改 2：強制間隔 60 秒。
+                # 這是解決 Quota 報錯的關鍵，確保 009816 與萬元實驗的 AI 請求不會撞在一起。
+                time.sleep(60) 
+                
                 # 2. 萬元實驗網格
                 if (now_tw.hour == 9 and 15 <= now_tw.minute <= 25) or \
                    (now_tw.hour == 13 and 20 <= now_tw.minute <= 35):
                     print("📊 執行萬元實驗室診斷...")
-                    # 💡 核心必要修改 3：在大型診斷前額外冷卻，確保 AI Quota 穩定
-                    time.sleep(10)
                     run_unified_experiment()
                 
-                # 從 180 改為 300 秒，確保 API 配額穩健
-                time.sleep(300) 
+                # 💡 核心必要修改 3：總循環間隔調整，扣除上方已 sleep 的 60 秒，維持約 5 分鐘節奏
+                time.sleep(240) 
             else:
                 print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，監控暫停中...")
                 time.sleep(1800) 
@@ -76,11 +75,9 @@ def home():
     return f"<h1>🦅 經理人中央控制台</h1><p>系統即時時間：{now_tw.strftime('%Y-%m-%d %H:%M:%S')}</p>"
 
 if __name__ == "__main__":
-    # 啟動背景執行緒
     t = threading.Thread(target=master_monitor_loop)
     t.daemon = True
     t.start()
     
-    # 啟動 Flask
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
