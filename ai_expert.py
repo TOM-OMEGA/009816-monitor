@@ -2,6 +2,8 @@ import os
 import requests
 import json
 from datetime import datetime, timedelta
+import pandas as pd
+from data_engine import get_fm_data  # 用來抓歷史價格計算月最低
 
 # === AI 冷卻 / Cache ===
 AI_CACHE = {}
@@ -10,7 +12,7 @@ AI_COOLDOWN_MINUTES = 1  # 盤中短時間內不重複呼叫
 
 def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
     """
-    呼叫 Gemini AI，判斷是否適合進場。
+    呼叫 Gemini AI，判斷是否適合買入。
     extra_data: 高階指標字典
     target_name: 標的名稱
     summary_override: 可自訂技術摘要文字
@@ -19,7 +21,7 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
     global AI_CACHE, AI_LAST_CALL
     now = datetime.now()
 
-    # === 構建 Cache Key ===
+    # === 构建 Cache Key ===
     summary_text = summary_override or ""
     key = f"{target_name}_{summary_text[:50]}"
     last_call = AI_LAST_CALL.get(key)
@@ -32,19 +34,29 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
 
     d = extra_data or {}
 
+    # === 計算本月最低點 ===
+    month_low = None
+    try:
+        df_month = get_fm_data("TaiwanStockPrice", target_name.replace(".TW",""), days=30)
+        if not df_month.empty:
+            month_low = df_month['close'].min()
+    except:
+        month_low = None
+
     # === 技術摘要組成 ===
     if summary_override:
         summary = summary_override
     else:
         summary = (
-            f"1.價量K線: {d.get('k_line', 'N/A')}\n"
-            f"2.即時Tick: {d.get('tick_last', 'N/A')}\n"
-            f"3.價值位階: {d.get('valuation', 'N/A')}\n"
-            f"4.盤中5s力道: {d.get('order_strength', 'N/A')}\n"
-            f"5.市場/報酬指數: {d.get('market_context', 'N/A')}\n"
-            f"6.大盤5s脈動: {d.get('idx_5s', 'N/A')}\n"
-            f"7.籌碼穩定: {d.get('day_trade', 'N/A')}, 法人:{d.get('inst', 'N/A')}, 大戶:{d.get('holders', 'N/A')}\n"
-            f"8.基本面: {d.get('rev', 'N/A')}"
+            f"1. 現價: {d.get('price','N/A')}\n"
+            f"2. 本月最低: {month_low if month_low else 'N/A'}\n"
+            f"3. K線/量: {d.get('k_line', 'N/A')}\n"
+            f"4. 盤中5s力道: {d.get('order_strength', 'N/A')}\n"
+            f"5. 價值位階: {d.get('valuation', 'N/A')}\n"
+            f"6. 市場脈動: {d.get('market_context', 'N/A')}\n"
+            f"7. 大盤5s脈動: {d.get('idx_5s', 'N/A')}\n"
+            f"8. 籌碼穩定: 法人 {d.get('inst', 'N/A')}, 大戶 {d.get('holders', 'N/A')}, 日內 {d.get('day_trade','N/A')}\n"
+            f"9. 基本面: {d.get('rev','N/A')}"
         )
 
     focus = "【重點監控：TSM/SOX 科技連動】" if any(x in target_name for x in ["2317", "00929"]) else "【重點監控：台股加權指數 & 金融防禦性】"
@@ -60,7 +72,7 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
 技術摘要:
 {summary}
 
-請你「綜合判斷現在是否適合買入」，而不是只看價格。
+請你「綜合判斷現在是否適合買入」，重點考慮當月最低點策略，不要只看價格。
 
 ⚠️ 嚴格輸出 JSON，禁止多餘文字：
 {{
