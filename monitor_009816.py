@@ -9,24 +9,32 @@ LINE_TOKEN = os.environ.get('LINE_ACCESS_TOKEN')
 USER_ID = os.environ.get('USER_ID')
 
 def get_realtime_data(ticker):
-    """強化版 yfinance 抓取：加入 Headers 偽裝防止被 Yahoo 封鎖"""
+    """強化版 yfinance 抓取：加入 Headers 與多重報價備援，防止 0.00 出現"""
     print(f"🔍 索取 {ticker} 即時報價...")
     try:
-        # 💡 建立 Session 並加入 User-Agent，讓請求看起來像一般瀏覽器
         session = requests.Session()
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
         
         t = yf.Ticker(ticker, session=session)
-        df = t.history(period="2d", timeout=8) # 稍微放寬至 8 秒確保穩定
+        # 💡 修改 1: 改用 1d 獲取最新成交，縮小數據量以提高雲端穿透率
+        df = t.history(period="1d", timeout=8) 
         
-        if not df.empty and len(df) >= 2:
+        # 💡 修改 2: 增加備援抓取機制 (fast_info)，若 history 被封鎖則啟用
+        curr = 0.0
+        if not df.empty:
             curr = float(df['Close'].iloc[-1])
-            prev = float(df['Close'].iloc[-2])
-            pct = ((curr / prev) - 1) * 100
+        else:
+            curr = float(t.fast_info.get('lastPrice', 0.0))
+            
+        if curr > 0:
+            # 取得昨收計算漲跌幅 (pct)
+            prev = t.info.get('previousClose', curr)
+            pct = ((curr / prev) - 1) * 100 if prev != 0 else 0.0
             print(f"✅ {ticker} 準確報價: {curr:.2f}")
             return curr, pct
+            
         return 0.0, 0.0
     except Exception as e:
         print(f"⚠️ yfinance 延遲或封鎖: {e}")
