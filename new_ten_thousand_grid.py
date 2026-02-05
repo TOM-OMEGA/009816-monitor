@@ -2,7 +2,7 @@ import yfinance as yf
 import requests
 import os
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from ai_expert import get_ai_point
 # ✅ 引入精準數據引擎
 from data_engine import get_high_level_insight 
@@ -16,6 +16,7 @@ TARGETS = {
 
 def check_trend(df):
     """ AI 多空判斷標準：葛蘭碧法則與均線扣抵預判 """
+    if len(df) < 60: return "⚪ 數據不足"
     curr_p = df['Close'].iloc[-1]
     ma20 = df['Close'].rolling(20).mean().iloc[-1]
     ma60 = df['Close'].rolling(60).mean().iloc[-1]
@@ -25,10 +26,13 @@ def check_trend(df):
     return "🟡 區間震盪 (網格套利)"
 
 def run_unified_experiment():
+    # 統一環境變數命名
     line_token = os.environ.get('LINE_ACCESS_TOKEN')
     user_id = os.environ.get('USER_ID')
     
-    report = f"🦅 經理人「萬元實驗」精準診斷\n日期: {datetime.now().strftime('%Y-%m-%d')}\n"
+    # 統一台灣時間
+    now_tw = datetime.now(timezone(timedelta(hours=8)))
+    report = f"🦅 經理人「萬元實驗」精準診斷\n日期: {now_tw.strftime('%Y-%m-%d %H:%M')}\n"
     report += "----------------------------"
 
     for symbol, cfg in TARGETS.items():
@@ -36,7 +40,9 @@ def run_unified_experiment():
             # A. 抓取技術面數據 (yfinance)
             ticker = yf.Ticker(symbol)
             df = ticker.history(period="60d").ffill()
-            if df.empty: continue
+            if df.empty: 
+                print(f"⚠️ {symbol} 抓不到數據")
+                continue
             
             curr_p = df['Close'].iloc[-1]
             trend_status = check_trend(df)
@@ -47,13 +53,15 @@ def run_unified_experiment():
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss.replace(0, 1e-6)
             rsi = 100 - (100 / (1 + rs.iloc[-1]))
-            bias_5 = ((curr_p - df['Close'].rolling(5).mean().iloc[-1]) / df['Close'].rolling(5).mean().iloc[-1]) * 100
             
-            # B. ✅ 抓取籌碼面數據 (FinMind API)
-            print(f"📡 獲取 {cfg['name']} 精準籌碼數據...")
+            ma5 = df['Close'].rolling(5).mean().iloc[-1]
+            bias_5 = ((curr_p - ma5) / ma5) * 100
+            
+            # B. ✅ 抓取 FinMind 全維度數據 (11項指標)
+            print(f"📡 獲取 {cfg['name']} 精準籌碼與盤中數據...")
             extra_data = get_high_level_insight(symbol)
             
-            # C. 呼叫 AI 進行「一年預判」點評
+            # C. 呼叫 AI 進行深度診斷
             summary = f"現價:{curr_p:.2f}, RSI:{rsi:.1f}, 5日乖離:{bias_5:.2f}%, 趨勢:{trend_status}"
             ai_comment = get_ai_point(summary, cfg['name'], extra_data)
             
@@ -61,27 +69,35 @@ def run_unified_experiment():
             trade_shares = int((cfg["cap"] / 5) / curr_p)
             
             report += f"\n\n📍 {cfg['name']}"
-            report += f"\n📊 籌碼: {extra_data.get('inst')}"
-            report += f"\n📈 營收: {extra_data.get('rev')}"
+            report += f"\n📊 評價: {extra_data.get('valuation', 'N/A')}"
+            report += f"\n📉 力道: {extra_data.get('order_strength', '穩定')}"
             report += f"\n🧠 AI 診斷: {ai_comment}"
             
-            # 加上邏輯鎖：若空頭且法人大賣，強制暫停買入
-            if "🔴" in trend_status and "外資:-" in extra_data.get('inst'):
-                report += f"\n🚫 [行動] 籌碼面與技術面雙弱，暫緩買入以避開急跌。"
+            # 加上邏輯鎖：若空頭且 5s 力道偏弱，建議審慎
+            if "🔴" in trend_status and "賣單" in extra_data.get('order_strength', ''):
+                report += f"\n🚫 [行動] 技術面與盤中力道雙弱，暫緩補貨。"
             else:
                 report += f"\n✅ [行動] 符合網格紀律，建議執行 {trade_shares} 股。"
 
         except Exception as e:
-            report += f"\n\n📍 {cfg['name']} 診斷失敗: {str(e)[:20]}"
+            print(f"❌ {cfg['name']} 診斷過程出錯: {e}")
+            report += f"\n\n📍 {cfg['name']} 診斷中斷"
 
-    # 發送訊息
+    # ✅ 強化後的發送邏輯
     if line_token and user_id:
         url = "https://api.line.me/v2/bot/message/push"
         headers = {"Authorization": f"Bearer {line_token}", "Content-Type": "application/json"}
         payload = {"to": user_id, "messages": [{"type": "text", "text": report}]}
-        res = requests.post(url, headers=headers, json=payload)
-        return f"🟢 萬元實驗戰報送達: {res.status_code}"
-    return "❌ 權限錯誤"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
+            print(f"📊 萬元實驗 Line 發送狀態: {res.status_code}")
+            return f"SUCCESS_{res.status_code}"
+        except Exception as e:
+            print(f"❌ Line 發送失敗: {e}")
+            return "LINE_SEND_FAILED"
+    else:
+        print("❌ 錯誤: 缺少 LINE_ACCESS_TOKEN 或 USER_ID")
+        return "MISSING_KEYS"
 
 if __name__ == "__main__":
     print(run_unified_experiment())
