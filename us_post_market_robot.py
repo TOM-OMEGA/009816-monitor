@@ -100,17 +100,21 @@ def generate_report(dfs):
 def push_line(report, img_base64=None):
     if not LINE_TOKEN or not USER_ID:
         print("⚠️ LINE TOKEN 或 USER ID 未設定")
-        return
+        return False
+
     headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
 
     # 先推文字
     payload_text = {"to": USER_ID, "messages":[{"type":"text","text":report}]}
     try:
-        res_text = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload_text, timeout=10)
-        print(f"📊 LINE 文字推播結果: {res_text.status_code}")
-        print(f"DEBUG payload: {payload_text}")
+        res_text = requests.post("https://api.line.me/v2/bot/message/push",
+                                 headers=headers, json=payload_text, timeout=10)
+        if res_text.status_code == 200:
+            print("✅ LINE 文字推播成功")
+        else:
+            print(f"⚠️ LINE 文字推播失敗: {res_text.status_code}, {res_text.text}")
     except Exception as e:
-        print(f"⚠️ LINE 文字推播失敗: {e}")
+        print(f"⚠️ LINE 文字推播例外: {e}")
 
     # 再推圖
     if img_base64:
@@ -123,10 +127,14 @@ def push_line(report, img_base64=None):
             ]
         }
         try:
-            res_img = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload_img, timeout=10)
-            print(f"📊 LINE 圖片推播結果: {res_img.status_code}")
+            res_img = requests.post("https://api.line.me/v2/bot/message/push",
+                                    headers=headers, json=payload_img, timeout=10)
+            if res_img.status_code == 200:
+                print("✅ LINE 圖片推播成功")
+            else:
+                print(f"⚠️ LINE 圖片推播失敗: {res_img.status_code}, {res_img.text}")
         except Exception as e:
-            print(f"⚠️ LINE 圖片推播失敗: {e}")
+            print(f"⚠️ LINE 圖片推播例外: {e}")
 
 # ==== 主程式 ====
 def run_us_post_market():
@@ -134,6 +142,7 @@ def run_us_post_market():
     report = generate_report(dfs)
     img_base64 = plot_chart(dfs)
     push_line(report, img_base64)
+    print("📊 美股盤後分析推播流程完成")
 
 # ==== 排程設定 (每天美東時間 16:05 執行) ====
 def schedule_job():
