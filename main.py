@@ -1,12 +1,22 @@
 import os
+import sys
 import time
 import threading
 from flask import Flask
 from datetime import datetime, timedelta, timezone
 
-# 匯入你的兩個監控模組
-from monitor_009816 import run_009816_monitor
-from new_ten_thousand_grid import run_unified_experiment
+# 💡 核心必要修改 1：強制將當前腳本目錄加入系統路徑
+# 這能解決 Render 部署時偶發的 ModuleNotFoundError
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+try:
+    # 匯入監控模組
+    from monitor_009816 import run_009816_monitor
+    from new_ten_thousand_grid import run_unified_experiment
+except ImportError as e:
+    print(f"❌ 導入失敗！請檢查檔案是否存在：{e}")
 
 app = Flask(__name__)
 
@@ -24,7 +34,9 @@ def master_monitor_loop():
     """主控迴圈：管理所有監控腳本"""
     print("🤖 中央監控系統啟動...")
     
-    # 💡 關鍵修改：首巡僅針對 009816，避免萬元實驗佔用過多 AI 額度
+    # 💡 核心必要修改 2：首巡增加短暫延遲，避開 Flask 啟動時的資源競爭
+    time.sleep(5)
+    
     try:
         if is_market_open():
             print("🚀 檢測到開盤中，啟動即時首巡...")
@@ -41,13 +53,15 @@ def master_monitor_loop():
                 # 1. 核心 009816 監控
                 run_009816_monitor()
                 
-                # 2. 萬元實驗網格 (維持您指定的兩個關鍵時段)
+                # 2. 萬元實驗網格
                 if (now_tw.hour == 9 and 15 <= now_tw.minute <= 25) or \
-                   (now_tw.hour == 13 and 20 <= now_tw.minute <= 35): # 💡 修正：13:30 收盤前執行
+                   (now_tw.hour == 13 and 20 <= now_tw.minute <= 35):
                     print("📊 執行萬元實驗室診斷...")
+                    # 💡 核心必要修改 3：在大型診斷前額外冷卻，確保 AI Quota 穩定
+                    time.sleep(10)
                     run_unified_experiment()
                 
-                # 💡 核心修改：從 180 改為 300 秒，確保 API 配額穩健
+                # 從 180 改為 300 秒，確保 API 配額穩健
                 time.sleep(300) 
             else:
                 print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，監控暫停中...")
