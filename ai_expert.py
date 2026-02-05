@@ -2,13 +2,14 @@ import os
 import requests
 import json
 from datetime import datetime, timedelta
+import time
 import pandas as pd
 from data_engine import get_fm_data  # 用來抓歷史價格計算月最低
 
 # === AI 冷卻 / Cache ===
 AI_CACHE = {}
 AI_LAST_CALL = {}
-AI_COOLDOWN_MINUTES = 1  # 盤中短時間內不重複呼叫
+AI_COOLDOWN_MINUTES = 5  # 測試時延長冷卻，避免 429
 
 def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
     """
@@ -51,7 +52,7 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
             f"5. 價值位階: {d.get('valuation', 'N/A')}\n"
             f"6. 市場脈動: {d.get('market_context', 'N/A')}\n"
             f"7. 大盤5s脈動: {d.get('idx_5s', 'N/A')}\n"
-            f"8. 籌碼穩定: 法人 {d.get('inst', 'N/A')}, 大戶 {d.get('holders', 'N/A')}, 日內 {d.get('day_trade','N/A')}\n"
+            f"8. 籌碼穩定: 法人 {d.get('inst','N/A')}, 大戶 {d.get('holders','N/A')}, 日內 {d.get('day_trade','N/A')}\n"
             f"9. 美股參考: {d.get('US_signal','N/A')}\n"
             f"10. 基本面: {d.get('rev','N/A')}"
         )
@@ -75,7 +76,7 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
 {{
   "decision": "可行 | 不可行 | 觀望",
   "confidence": 0-100,
-  "reason": "100字內理由"
+  "reason": "60字內理由"
 }}
 
 規則：
@@ -85,19 +86,30 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
 
     payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.4}}
 
-    # 呼叫 API
-    try:
-        res = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}",
-            json=payload,
-            timeout=30
-        )
-        res.raise_for_status()
-        data = res.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        ai_result = json.loads(text)
-    except Exception as e:
-        ai_result = {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
+    # ==== 呼叫 API + 429 重試機制 ====
+    ai_result = {"decision": "ERROR", "confidence": 0, "reason": "未呼叫 API"}
+    for attempt in range(2):
+        try:
+            res = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}",
+                json=payload,
+                timeout=30
+            )
+            res.raise_for_status()
+            data = res.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            ai_result = json.loads(text)
+            break
+        except requests.exceptions.HTTPError as e:
+            if res.status_code == 429:
+                print("⚠️ AI API 限流，等待 20 秒後重試...")
+                time.sleep(20)
+            else:
+                ai_result = {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
+                break
+        except Exception as e:
+            ai_result = {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
+            break
 
     # 更新 Cache
     AI_CACHE[key] = ai_result
@@ -114,5 +126,5 @@ def get_us_ai_point(extra_data=None, target_name="US_MARKET"):
     target_name: SPY, QQQ, DIA, TSM
     """
     summary_override = f"美股收盤資料: {extra_data or 'N/A'}"
-    # 用台股原本函式，但 summary 改成美股收盤資訊
+    # 直接呼叫台股 AI 函式，但 summary 換成美股收盤資料
     return get_ai_point(extra_data=extra_data, target_name=target_name, summary_override=summary_override)
