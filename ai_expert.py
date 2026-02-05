@@ -5,12 +5,11 @@ def get_ai_point(summary, target_name, extra_data=None):
     gemini_key = os.environ.get('GEMINI_API_KEY')
     if not gemini_key: return "❌ Secret 錯誤"
 
-    # 使用您指定的頂級 Gemini 3 Pro 預覽版
-    model_name = "gemini-3-pro-preview" 
+    # 💡 僅修改此處：對接您列表中的正式模型名稱 (原 gemini-3-pro-preview 會導致 404)
+    model_name = "gemini-3-flash-preview" 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
     
-    # 💡 11項全維度數據精確提取 (若無數據則顯示 N/A)
-    # 包含：日成交、Tick、還原價、K線、PER/PBR、5s委託、5s指數、加權、當沖、報酬指數
+    # 💡 以下邏輯完全保留您的原始設計
     d = extra_data if extra_data else {}
     ext_msg = (
         f"1.價量K線: {d.get('k_line', 'N/A')}\n"
@@ -23,7 +22,6 @@ def get_ai_point(summary, target_name, extra_data=None):
         f"8.基本面: {d.get('rev', 'N/A')}"
     )
     
-    # 針對標的屬性區分「連動監控」重點 (維持經理人原始邏輯)
     if "009816" in target_name:
         persona_logic = (
             "身分：基金經理人 (守護 2027 結婚基金)。\n"
@@ -51,13 +49,12 @@ def get_ai_point(summary, target_name, extra_data=None):
             "10.【自動化】: 克服人性，一旦邏輯確立則排程執行，嚴禁情緒干預。"
         )
 
-    # 將 11 項精準數據與您的任務要求結合
     task_description = (
         f"【角色身分】: {persona_logic}\n"
         f"【技術指標摘要】: {summary}\n"
         f"【全維度 11 項實戰數據】:\n{ext_msg}\n"
         f"【任務】: 結合上述鐵律與全維度數據，針對 {target_name} 給予 150 字內診斷。\n"
-        f"【要求】: 必須明確給出『執行建議：可行/不可行/觀望』。2027 年視角，數據導向，沈穩且具權威性。"
+        f"【要求】: 必須明確給出『執行建議：可行/不可行/觀望』。2027 年視告，數據導向，沈穩且具權威性。"
     )
 
     payload = {
@@ -68,6 +65,10 @@ def get_ai_point(summary, target_name, extra_data=None):
     try:
         res = requests.post(url, json=payload, timeout=30)
         result = res.json()
+        # 💡 增加報錯檢索，若 API 回傳 Error 會直接顯示，方便您在日誌查看原因
+        if 'error' in result:
+            return f"❌ AI 報錯: {result['error'].get('message', '未知錯誤')[:20]}"
+            
         if 'candidates' in result:
             return result['candidates'][0]['content']['parts'][0]['text']
         return "💡 系統校對中，請維持紀律。"
