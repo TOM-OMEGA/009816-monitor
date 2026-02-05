@@ -1,6 +1,7 @@
 import yfinance as yf
 import requests
 import os
+import time # 💡 必須引入
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from ai_expert import get_ai_point
@@ -60,6 +61,11 @@ def run_unified_experiment():
             # B. ✅ 抓取 FinMind 全維度數據 (11項指標)
             print(f"📡 獲取 {cfg['name']} 精準籌碼與盤中數據...")
             extra_data = get_high_level_insight(symbol)
+            
+            # 💡 核心必要修改：在呼叫 AI 診斷前強制排隊冷卻
+            # 確保 00929, 2317, 00878 不會在同一秒鐘衝撞 API 配額
+            print(f"⏳ 正在排隊發送 {cfg['name']} AI 診斷 (冷卻 25 秒)...")
+            time.sleep(25)
             
             # C. 呼叫 AI 進行深度診斷
             summary = f"現價:{curr_p:.2f}, RSI:{rsi:.1f}, 5日乖離:{bias_5:.2f}%, 趨勢:{trend_status}"
