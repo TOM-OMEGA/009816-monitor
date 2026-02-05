@@ -9,24 +9,20 @@ LINE_TOKEN = os.environ.get('LINE_ACCESS_TOKEN')
 USER_ID = os.environ.get('USER_ID')
 
 def get_realtime_data(ticker):
-    """強化版 yfinance 抓取：加入 Headers 與多重報價備援，防止 0.00 出現"""
+    """移除 Session 以解決 curl_cffi 報錯，並強化快取報價抓取"""
     print(f"🔍 索取 {ticker} 即時報價...")
     try:
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
+        # 💡 核心必要修改：移除自定義 Session，直接使用 yf.Ticker
+        t = yf.Ticker(ticker)
         
-        t = yf.Ticker(ticker, session=session)
-        # 💡 修改 1: 改用 1d 獲取最新成交，縮小數據量以提高雲端穿透率
-        df = t.history(period="1d", timeout=8) 
+        # 💡 修改 1: 優先嘗試 fast_info 獲取快取成交價，避開 history 的 K 線限制
+        curr = float(t.fast_info.get('lastPrice', 0.0))
         
-        # 💡 修改 2: 增加備援抓取機制 (fast_info)，若 history 被封鎖則啟用
-        curr = 0.0
-        if not df.empty:
-            curr = float(df['Close'].iloc[-1])
-        else:
-            curr = float(t.fast_info.get('lastPrice', 0.0))
+        # 💡 修改 2: 若快取無效，則嘗試 history 1d
+        if curr <= 0:
+            df = t.history(period="1d", timeout=10) 
+            if not df.empty:
+                curr = float(df['Close'].iloc[-1])
             
         if curr > 0:
             # 取得昨收計算漲跌幅 (pct)
@@ -37,7 +33,7 @@ def get_realtime_data(ticker):
             
         return 0.0, 0.0
     except Exception as e:
-        print(f"⚠️ yfinance 延遲或封鎖: {e}")
+        print(f"⚠️ yfinance 抓取異常: {e}")
         return 0.0, 0.0
 
 def run_009816_monitor():
