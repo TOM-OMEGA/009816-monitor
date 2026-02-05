@@ -43,7 +43,7 @@ def rebound_probability(df):
 def recent_trend_score(df):
     if len(df) < 4:
         return 0,0
-    closes = df['Close'].iloc[-4:]  # 今天 + 前三天
+    closes = df['Close'].iloc[-4:]
     scores = [closes.iloc[i] - closes.iloc[i-1] for i in range(1,len(closes))]
     up_days = sum(1 for s in scores if s>0)
     down_days = sum(1 for s in scores if s<0)
@@ -102,22 +102,31 @@ def push_line(report, img_base64=None):
         print("⚠️ LINE TOKEN 或 USER ID 未設定")
         return
     headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
+
+    # 先推文字
+    payload_text = {"to": USER_ID, "messages":[{"type":"text","text":report}]}
+    try:
+        res_text = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload_text, timeout=10)
+        print(f"📊 LINE 文字推播結果: {res_text.status_code}")
+        print(f"DEBUG payload: {payload_text}")
+    except Exception as e:
+        print(f"⚠️ LINE 文字推播失敗: {e}")
+
+    # 再推圖
     if img_base64:
-        payload = {
+        payload_img = {
             "to": USER_ID,
             "messages":[
-                {"type":"text","text":report},
-                {"type":"image","originalContentUrl":f"data:image/png;base64,{img_base64}",
-                 "previewImageUrl":f"data:image/png;base64,{img_base64}"}
+                {"type":"image",
+                 "originalContentUrl": f"data:image/png;base64,{img_base64}",
+                 "previewImageUrl": f"data:image/png;base64,{img_base64}"}
             ]
         }
-    else:
-        payload = {"to": USER_ID, "messages":[{"type":"text","text":report}]}
-    try:
-        res = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload, timeout=10)
-        print(f"📊 LINE 推播結果: {res.status_code}")
-    except Exception as e:
-        print(f"⚠️ LINE 推播失敗: {e}")
+        try:
+            res_img = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload_img, timeout=10)
+            print(f"📊 LINE 圖片推播結果: {res_img.status_code}")
+        except Exception as e:
+            print(f"⚠️ LINE 圖片推播失敗: {e}")
 
 # ==== 主程式 ====
 def run_us_post_market():
@@ -128,14 +137,14 @@ def run_us_post_market():
 
 # ==== 排程設定 (每天美東時間 16:05 執行) ====
 def schedule_job():
-    schedule.every().day.at("21:05").do(run_us_post_market)  # UTC 21:05 ≈ 美東 16:05
+    schedule.every().day.at("21:05").do(run_us_post_market)
     print("📅 美股盤後分析排程已啟動，每天美東時間16:05自動執行")
     while True:
         schedule.run_pending()
         time.sleep(30)
 
 if __name__ == "__main__":
-    TEST_MODE = True  # True: 立即測試，False: 啟動排程
+    TEST_MODE = True
     if TEST_MODE:
         print("🚀 測試模式，立即抓取資料與推播 LINE")
         run_us_post_market()
