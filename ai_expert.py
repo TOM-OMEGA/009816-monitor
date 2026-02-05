@@ -1,42 +1,68 @@
 import os
 import requests
 import json
+from datetime import datetime, timedelta
 
-def get_ai_point(summary, target_name, extra_data=None):
-    gemini_key = os.environ.get('GEMINI_API_KEY')
+# === AI 冷卻 / Cache ===
+AI_CACHE = {}
+AI_LAST_CALL = {}
+AI_COOLDOWN_MINUTES = 1  # 盤中短時間內不重複呼叫
+
+def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
+    """
+    呼叫 Gemini AI，判斷是否適合進場。
+    extra_data: 高階指標字典
+    target_name: 標的名稱
+    summary_override: 可自訂技術摘要文字
+    """
+
+    global AI_CACHE, AI_LAST_CALL
+    now = datetime.now()
+
+    # === 構建 Cache Key ===
+    summary_text = summary_override or ""
+    key = f"{target_name}_{summary_text[:50]}"
+    last_call = AI_LAST_CALL.get(key)
+    if last_call and (now - last_call).total_seconds() < AI_COOLDOWN_MINUTES * 60:
+        return AI_CACHE.get(key, {"decision":"觀望","confidence":0,"reason":"冷卻中"})
+
+    gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:
         return {"decision": "ERROR", "confidence": 0, "reason": "Missing API Key"}
 
-    model_name = "gemini-2.0-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
-
     d = extra_data or {}
-    ext_data = {
-        "valuation": d.get("valuation"),
-        "order_strength": d.get("order_strength"),
-        "market_context": d.get("market_context"),
-        "idx_5s": d.get("idx_5s"),
-        "k_line": d.get("k_line"),
-        "tick": d.get("tick_last"),
-        "chip": {
-            "inst": d.get("inst"),
-            "holders": d.get("holders"),
-            "day_trade": d.get("day_trade")
-        },
-        "fundamental": d.get("rev")
-    }
+
+    # === 技術摘要組成 ===
+    if summary_override:
+        summary = summary_override
+    else:
+        summary = (
+            f"1.價量K線: {d.get('k_line', 'N/A')}\n"
+            f"2.即時Tick: {d.get('tick_last', 'N/A')}\n"
+            f"3.價值位階: {d.get('valuation', 'N/A')}\n"
+            f"4.盤中5s力道: {d.get('order_strength', 'N/A')}\n"
+            f"5.市場/報酬指數: {d.get('market_context', 'N/A')}\n"
+            f"6.大盤5s脈動: {d.get('idx_5s', 'N/A')}\n"
+            f"7.籌碼穩定: {d.get('day_trade', 'N/A')}, 法人:{d.get('inst', 'N/A')}, 大戶:{d.get('holders', 'N/A')}\n"
+            f"8.基本面: {d.get('rev', 'N/A')}"
+        )
+
+    focus = "【重點監控：TSM/SOX 科技連動】" if any(x in target_name for x in ["2317", "00929"]) else "【重點監控：台股加權指數 & 金融防禦性】"
+    persona_logic = (
+        f"身分：作者劉承彥。標的：{target_name}。{focus}\n"
+        "請嚴守十條實戰鐵律：1.期望值 2.非加碼 3.趨勢濾網 4.動態間距 5.資金控制 "
+        "6.除息還原 7.低成本 8.情緒收割 9.連動風險 10.自動化。"
+    )
 
     prompt = f"""
-你是台股基金經理人，你的判斷會被程式直接用來決定是否買入。
+{persona_logic}
 
-【標的】:{target_name}
-【技術摘要】:{summary}
-【市場數據】:{json.dumps(ext_data, ensure_ascii=False)}
+技術摘要:
+{summary}
 
 請你「綜合判斷現在是否適合買入」，而不是只看價格。
 
 ⚠️ 嚴格輸出 JSON，禁止多餘文字：
-
 {{
   "decision": "可行 | 不可行 | 觀望",
   "confidence": 0-100,
@@ -53,10 +79,25 @@ def get_ai_point(summary, target_name, extra_data=None):
         "generationConfig": {"temperature": 0.4}
     }
 
+    # === 呼叫 API + 錯誤保護 ===
     try:
-        res = requests.post(url, json=payload, timeout=30)
+        res = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}",
+            json=payload,
+            timeout=30
+        )
+        res.raise_for_status()
         data = res.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return json.loads(text)
+        ai_result = json.loads(text)
     except Exception as e:
-        return {"decision": "ERROR", "confidence": 0, "reason": str(e)[:30]}
+        ai_result = {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
+
+    # === 更新 Cache ===
+    AI_CACHE[key] = ai_result
+    AI_LAST_CALL[key] = now
+
+    # === Debug Log ===
+    print(f"🤖 AI ({target_name}): {ai_result}")
+
+    return ai_result
