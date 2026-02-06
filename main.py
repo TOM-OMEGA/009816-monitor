@@ -2,9 +2,19 @@
 import os
 import logging
 import requests
-from flask import Flask, request
+from flask import Flask
 from datetime import datetime
 
+# =========================
+# 導入你的 AI 模組（一次載入，避免 Render 卡死）
+# =========================
+from monitor_009816 import run_taiwan_stock
+from new_ten_thousand_grid import run_grid
+from us_post_market_robot import run_us_ai
+
+# =========================
+# 基本設定
+# =========================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = Flask(__name__)
 
@@ -26,12 +36,12 @@ def send_discord(msg: str):
         )
         logging.info(f"Discord status {r.status_code}")
         return r.status_code in (200, 204)
-    except Exception as e:
+    except Exception:
         logging.exception("Discord 發送失敗")
         return False
 
 # =========================
-# 基本頁
+# 首頁
 # =========================
 @app.route("/")
 def home():
@@ -51,8 +61,6 @@ def home():
 # =========================
 @app.route("/run/tw")
 def run_tw():
-    from taiwan_stock_monitor import run_taiwan_stock
-
     send_discord("📊【台股存股 AI】開始分析")
     result = run_taiwan_stock()
     send_discord(f"📊【台股存股 AI】結果\n{result}")
@@ -62,9 +70,7 @@ def run_tw():
 # 台股網格
 # =========================
 @app.route("/run/grid")
-def run_grid():
-    from taiwan_grid_experiment import run_grid
-
+def run_grid_route():
     send_discord("🧱【台股網格 AI】開始分析")
     result = run_grid()
     send_discord(f"🧱【台股網格 AI】結果\n{result}")
@@ -75,8 +81,6 @@ def run_grid():
 # =========================
 @app.route("/run/us")
 def run_us():
-    from us_market_ai import run_us_ai
-
     send_discord("🌎【美股盤後 AI】開始分析")
     result = run_us_ai()
     send_discord(f"🌎【美股盤後 AI】結果\n{result}")
@@ -88,10 +92,6 @@ def run_us():
 @app.route("/run/all")
 def run_all():
     send_discord("🚀【AI 任務】全部執行")
-
-    from taiwan_stock_monitor import run_taiwan_stock
-    from taiwan_grid_experiment import run_grid
-    from us_market_ai import run_us_ai
 
     r1 = run_taiwan_stock()
     r2 = run_grid()
