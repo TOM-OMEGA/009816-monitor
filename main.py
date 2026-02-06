@@ -1,177 +1,114 @@
-# main.py（Render 免費 Web Service 專用）
-import os
-import logging
-import requests
+import os, sys, time, logging, requests, json
 from flask import Flask
 from datetime import datetime
-import json
-import time
 
-# =========================
-# 導入你的 AI 模組（一次載入，避免 Render 卡死）
-# =========================
+# --- 1. 環境設定與導入 ---
+import matplotlib
+matplotlib.use('Agg')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+# 延遲導入確保模組安全
 from monitor_009816 import run_taiwan_stock
 from new_ten_thousand_grid import run_grid
 from us_post_market_robot import run_us_ai
 
-# =========================
-# 基本設定
-# =========================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 app = Flask(__name__)
-
-# =========================
-# Discord Webhook
-# =========================
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip() or None
 
-def send_discord(msg: str = None, file_path: str = None):
-    """安全發送 Discord，支援文字 + 附件 + 限流重試"""
+# =========================
+# 核心：整合發送函式 (防 429 版本)
+# =========================
+def send_discord_unified(title: str, content: str):
     if not WEBHOOK:
         logging.error("❌ DISCORD_WEBHOOK_URL 未設定")
         return False
 
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 建立 Markdown 格式報告
+    full_message = f"# 🦅 {title}\n**執行時間:** `{now_str}`\n\n{content}"
+
+    # Discord 單則上限 2000 字，設定 1900 為安全切割線
+    max_len = 1900
     success = True
-
-    # 發送文字
-    if msg:
-        max_len = 1900
-        for start in range(0, len(msg), max_len):
-            part = msg[start:start+max_len]
-            for attempt in range(5):
-                try:
-                    r = requests.post(WEBHOOK, json={"content": part}, timeout=15)
-                    if r.status_code == 429:
-                        retry = float(r.headers.get("Retry-After", 5))
-                        logging.warning(f"⚠️ Discord 限流 429，等待 {retry} 秒重試 ({attempt+1}/5)")
-                        time.sleep(retry)
-                        continue
-                    elif r.status_code not in (200, 204):
-                        logging.warning(f"⚠️ Discord 發送異常，狀態碼 {r.status_code}")
-                        time.sleep(2 ** attempt)
-                        continue
-                    logging.info(f"Discord 發送成功，狀態碼 {r.status_code}")
-                    break
-                except Exception as e:
-                    wait = 2 ** attempt
-                    logging.warning(f"⚠️ Discord 發送失敗: {e}，等待 {wait} 秒後重試")
-                    time.sleep(wait)
-            else:
-                logging.error("❌ Discord 發送多次失敗，跳過此段訊息")
-                success = False
-
-    # 發送附件
-    if file_path and os.path.exists(file_path):
+    
+    # 針對超長內容進行自動切割發送
+    for start in range(0, len(full_message), max_len):
+        part = full_message[start:start+max_len]
+        # 指數型退避重試
         for attempt in range(5):
             try:
-                with open(file_path, "rb") as f:
-                    r = requests.post(WEBHOOK, files={"file": f}, timeout=30)
+                r = requests.post(WEBHOOK, json={"content": part}, timeout=20)
                 if r.status_code == 429:
-                    retry = float(r.headers.get("Retry-After", 5))
-                    logging.warning(f"⚠️ Discord 限流 429 圖片/檔案，等待 {retry} 秒重試 ({attempt+1}/5)")
-                    time.sleep(retry)
+                    retry_after = float(r.headers.get("Retry-After", 5))
+                    logging.warning(f"⚠️ Discord 限流，等待 {retry_after} 秒...")
+                    time.sleep(retry_after + 0.5)
                     continue
-                elif r.status_code not in (200, 204):
-                    logging.warning(f"⚠️ Discord 附件發送異常，狀態碼 {r.status_code}")
+                elif r.status_code in (200, 204):
+                    logging.info("✅ 訊息段落發送成功")
+                    break
+                else:
+                    logging.warning(f"⚠️ 異常碼 {r.status_code}, 重試中...")
                     time.sleep(2 ** attempt)
-                    continue
-                logging.info(f"Discord 附件發送成功，狀態碼 {r.status_code}")
-                break
             except Exception as e:
-                wait = 2 ** attempt
-                logging.warning(f"⚠️ Discord 附件發送失敗: {e}，等待 {wait} 秒後重試")
-                time.sleep(wait)
+                logging.error(f"❌ 發送異常: {e}")
+                time.sleep(2 ** attempt)
         else:
-            logging.error("❌ Discord 附件發送多次失敗，跳過")
             success = False
-
+            
     return success
-
-def save_and_send_file(content: str, prefix: str):
-    """將內容存成文字檔，附上時間戳，然後透過 Discord 附件發送"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{prefix}_{timestamp}.txt"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-    logging.info(f"✅ 已將結果存成檔案 {filename}")
-    send_discord(file_path=filename)
-    os.remove(filename)
-    logging.info(f"🗑 已刪除暫存檔 {filename}")
-
-# =========================
-# 首頁
-# =========================
-@app.route("/")
-def home():
-    return f"""
-    <h1>🦅 AI Manager (Render Free)</h1>
-    <p>Server time: {datetime.now()}</p>
-    <ul>
-      <li><a href="/run/tw">台股存股 AI</a></li>
-      <li><a href="/run/grid">台股網格 AI</a></li>
-      <li><a href="/run/us">美股盤後 AI</a></li>
-      <li><a href="/run/all">全部執行</a></li>
-    </ul>
-    """
 
 # =========================
 # 執行任務安全包裝
 # =========================
 def safe_run(func, name):
     try:
+        logging.info(f"🚀 啟動任務: {name}")
         result = func()
         if isinstance(result, dict):
-            result = json.dumps(result, ensure_ascii=False, indent=2)
-        return result
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        return str(result)
     except Exception as e:
-        logging.exception(f"{name} 執行失敗")
-        return f"❌ {name} 執行失敗: {str(e)}"
+        logging.exception(f"{name} 執行崩潰")
+        return f"❌ {name} 執行失敗: {str(e)[:50]}"
 
 # =========================
-# 台股存股
+# 路由 (整合測試與執行)
 # =========================
-@app.route("/run/tw")
-def run_tw():
-    send_discord("📊【台股存股 AI】開始分析")
-    result = safe_run(run_taiwan_stock, "台股存股 AI")
-    save_and_send_file(result, "tw_result")
-    return "OK"
+@app.route("/")
+def home():
+    webhook_status = "✅ 已連結" if WEBHOOK else "❌ 缺失"
+    return f"""
+    <div style="font-family:sans-serif; padding:20px; max-width:500px; margin:auto; line-height:1.6;">
+        <h1 style="color:#5865F2;">🦅 AI Manager Pro</h1>
+        <p><b>Server Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><b>Webhook Status:</b> {webhook_status}</p>
+        <hr>
+        <div style="background:#f4f4f4; padding:15px; border-radius:10px;">
+            <p>👉 <a href="/run/all" style="display:block; text-align:center; background:#5865F2; color:white; padding:12px; text-decoration:none; border-radius:5px; font-weight:bold;">🚀 執行全部任務 (整合推播)</a></p>
+            <p style="font-size:0.85em; color:#666; text-align:center;">此操作將整合「台股存股+網格+美股」並發送單一報告</p>
+        </div>
+    </div>
+    """
 
-# =========================
-# 台股網格
-# =========================
-@app.route("/run/grid")
-def run_grid_route():
-    send_discord("🧱【台股網格 AI】開始分析")
-    result = safe_run(run_grid, "台股網格 AI")
-    save_and_send_file(result, "grid_result")
-    return "OK"
-
-# =========================
-# 美股盤後
-# =========================
-@app.route("/run/us")
-def run_us():
-    send_discord("🌎【美股盤後 AI】開始分析")
-    result = safe_run(run_us_ai, "美股盤後 AI")
-    save_and_send_file(result, "us_result")
-    return "OK"
-
-# =========================
-# 全部一次
-# =========================
 @app.route("/run/all")
 def run_all():
-    send_discord("🚀【AI 任務】全部執行")
+    # 1. 逐一執行並收集
+    res_tw = safe_run(run_taiwan_stock, "台股存股")
+    res_grid = safe_run(run_grid, "台股網格")
+    res_us = safe_run(run_us_ai, "美股盤後")
 
-    r1 = safe_run(run_taiwan_stock, "台股存股 AI")
-    r2 = safe_run(run_grid, "台股網格 AI")
-    r3 = safe_run(run_us_ai, "美股盤後 AI")
+    # 2. 拼接 Markdown 內容 (使用 ``` 讓數據對齊)
+    combined_report = (
+        "### 📈 台股存股分析\n```\n" + res_tw + "\n```\n"
+        "### 🧱 台股網格監控\n```\n" + res_grid + "\n```\n"
+        "### 🌎 美股盤後 AI\n```\n" + res_us + "\n```"
+    )
 
-    combined = f"台股存股：\n{r1}\n\n台股網格：\n{r2}\n\n美股盤後：\n{r3}"
-    save_and_send_file(combined, "all_result")
-
-    return "ALL DONE"
+    # 3. 單一請求發送
+    if send_discord_unified("AI 綜合投資報告", combined_report):
+        return "<h3>✅ 任務全數執行成功</h3><p>請前往 Discord 頻道查收報告。</p><br><a href='/'>返回</a>"
+    else:
+        return "<h3>⚠️ 執行完成但推播異常</h3><p>請檢查 Render Logs 確認 429 狀況。</p><br><a href='/'>返回</a>"
 
 # =========================
 # Render 啟動
