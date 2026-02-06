@@ -243,6 +243,14 @@ def schedule_job():
         schedule.run_pending()
         time.sleep(30)
 
-if __name__=="__main__":
-    # 本地測試或 Render 初次部署測試
-    run_us_post_market()
+# ================= 標準入口（給 main.py 用） =================
+def run_us_ai():
+    """
+    統一給主控程式呼叫的入口（美股收盤 AI）
+    """
+    return run_unified_experiment()
+
+
+# 允許單獨執行（本地或 Render 測試用）
+if __name__ == "__main__":
+    print(run_us_ai())
