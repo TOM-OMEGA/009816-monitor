@@ -201,12 +201,12 @@ def run_us_post_market():
 # ==== 排程模式 (供 main.py 呼叫) ====
 def schedule_job():
     import schedule, time
-    run_time_tw = "05:05"
-    schedule.every().day.at(run_time_tw).do(run_us_post_market)
-    print(f"📅 [美股排程] 已啟動，預計每天台灣時間 {run_time_tw} 執行")
+    run_time = "05:05" 
+    schedule.every().day.at(run_time).do(run_us_post_market)
+    print(f"📅 [美股排程] 已掛載，基準時間: {run_time} (依據 TZ 環境變數)")
     while True:
         schedule.run_pending()
-        time.sleep(60)
+        time.sleep(30) # 縮短輪詢間隔
 
 if __name__=="__main__":
     # 本地測試時建議將 TEST_MODE 設為 True
