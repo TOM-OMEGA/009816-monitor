@@ -50,7 +50,7 @@ def master_monitor_loop():
 
             else:
                 print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，監控暫停中...")
-                time.sleep(1800)  # 非交易日/時段休眠 30 分鐘
+                time.sleep(300)  # 👈 改成 5 分鐘檢查一次，確保開盤不延遲
 
         except Exception as e:
             print(f"⚠️ 中央監控異常: {e}")
@@ -73,21 +73,15 @@ def trigger_us_post_market():
         return f"❌ 執行失敗: {e}"
 
 if __name__ == "__main__":
-    # 💡 防止 Flask 重複啟動執行緒
-    if not os.environ.get("WERKZEUG_RUN_MAIN"):
-        # 啟動中央巡檢
-        t = threading.Thread(target=master_monitor_loop, daemon=True)
-        t.start()
+    # 1. 啟動台股巡檢 (master_monitor_loop)
+    t_taiwan = threading.Thread(target=master_monitor_loop, daemon=True)
+    t_taiwan.start()
+    print("✅ 台股巡檢線程啟動")
 
-        # 啟動美股盤後分析排程
-        t2 = threading.Thread(target=schedule_job, daemon=True)
-        t2.start()
-
-        # 測試模式：啟動時立即推播一次
-        TEST_MODE = True
-        if TEST_MODE:
-            print("🚀 測試模式啟動：立即執行美股盤後分析並推播 LINE")
-            run_us_post_market()
-
+    # 2. 啟動美股排程 (修正：新增這段)
+    t_us = threading.Thread(target=schedule_job, daemon=True)
+    t_us.start()
+    print("✅ 美股 05:05 排程線程啟動")
+    
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=port)
