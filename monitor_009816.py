@@ -1,50 +1,113 @@
-import os
 import yfinance as yf
-from datetime import datetime
+import pandas as pd
+import numpy as np
+from datetime import datetime, timezone, timedelta
 
-def run_009816_monitor():
-    """
-    抓取 009816 實際行情並生成報告文字
-    """
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    target_stock = "00915.TW"  # 範例使用 00915 (凱基優選高股息) 或你的目標代號
-    
+def smart_dca_009816():
+    symbol = "009816.TW"
+    name = "凱基台灣top50 (009816)"
+
+    ticker = yf.Ticker(symbol)
+    df = ticker.history(period="max", timeout=15)
+
+    if df.empty or len(df) < 10:
+        return f"❌ {name}: 掛牌資料不足，暫不評分"
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    close = df["Close"]
+    price = close.iloc[-1]
+
+    # =====================
+    # 模組 1：價格位階 (40)
+    # =====================
+    low_1m = close.tail(20).min()
+    low_3m = close.tail(60).min()
+    high_3m = close.tail(60).max()
+
+    dist_1m = (price / low_1m - 1) * 100
+    dist_3m_high = (price / high_3m - 1) * 100
+
+    score_price = 40
+    if dist_1m < 2: score_price += 10
+    if dist_3m_high < -8: score_price += 10
+    score_price = min(score_price, 50)
+
+    # =====================
+    # 模組 2：趨勢結構 (25)
+    # =====================
+    ma20 = close.rolling(20).mean().iloc[-1]
+    ma20_prev = close.rolling(20).mean().iloc[-5]
+
+    score_trend = 25
+    if price > ma20 and ma20 > ma20_prev:
+        score_trend -= 5  # 避免追高
+    if price < ma20:
+        score_trend += 5
+
+    score_trend = max(min(score_trend, 25), 0)
+
+    # =====================
+    # 模組 3：RSI 動能 (15)
+    # =====================
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
+    rsi = 100 - (100 / (1 + gain / loss.replace(0, np.nan)))
+    rsi_val = rsi.iloc[-1]
+
+    score_rsi = 15
+    if rsi_val < 35: score_rsi += 5
+    if rsi_val > 65: score_rsi -= 5
+    score_rsi = max(min(score_rsi, 15), 0)
+
+    # =====================
+    # 模組 4：市場環境 (10)
+    # =====================
+    score_env = 10
     try:
-        # 1. 抓取數據 (加入 timeout 避免卡死 Render)
-        stock = yf.Ticker(target_stock)
-        df = stock.history(period="2d")
-        
-        if df.empty:
-            return f"⚠️ **台股監控提醒**\n無法取得 {target_stock} 數據，請檢查 API 連線。"
+        sox = yf.Ticker("^SOX").history(period="5d")["Close"]
+        if sox.pct_change().iloc[-1] < -1:
+            score_env -= 3
+    except:
+        pass
 
-        # 2. 計算漲跌
-        current_price = df['Close'].iloc[-1]
-        prev_price = df['Close'].iloc[-2]
-        change = current_price - prev_price
-        pct_change = (change / prev_price) * 100
-        
-        emoji = "📈" if change >= 0 else "📉"
-        
-        # 3. 組合報告內容
-        report = (
-            f"📊 **台股監控回報 ({target_stock})**\n"
-            f"現價: `{current_price:.2f}` ({emoji} {pct_change:+.2f}%)\n"
-            f"狀態: 🟢 監控運作中\n"
-            f"更新: `{now_str}`"
-        )
-        return report
+    # =====================
+    # 模組 5：月存時間 (10)
+    # =====================
+    today = datetime.now(timezone(timedelta(hours=8)))
+    score_time = 10 if today.day <= 20 else 5
 
-    except Exception as e:
-        # 如果抓不到數據，回傳基礎連線報告，確保 main.py 不會因為這裡掛掉而發不出其他兩份報告
-        return f"📊 **系統連線診斷**\n狀態: 🟡 基礎連線正常 (數據抓取異常: {str(e)[:30]})\n時間: `{now_str}`"
+    # =====================
+    # 總分與決策
+    # =====================
+    total_score = score_price + score_trend + score_rsi + score_env + score_time
 
-# === ✅ 標準入口（給 main.py 用）===
-def run_taiwan_stock():
-    """
-    統一給 main.py import 的入口
-    """
-    try:
-        return run_009816_monitor()
-    except Exception as e:
-        # 這是最後一道防線，絕對不 throw exception 給 main.py
-        return f"❌ 台股監控模組完全崩潰: {str(e)[:50]}"
+    if total_score >= 75:
+        action = "🟢 強烈佈局（可加碼）"
+    elif total_score >= 60:
+        action = "🟡 正常定期"
+    elif total_score >= 45:
+        action = "🟠 保守佈局（少量）"
+    else:
+        action = "🔴 暫緩，等回檔"
+
+    report = f"""
+🦅 經理人 AI 存股決策 ({today:%Y-%m-%d})
+------------------
+📌 標的: {name}
+現價: {price:.2f}
+月低距離: {dist_1m:.2f}%
+RSI: {rsi_val:.1f}
+
+🧠 決策分數: {total_score} / 100
+📊 行動建議: {action}
+
+📖 經理人解讀:
+- 本系統不追最低點，只買在「結構合理偏低」
+- 若未達理想位階，最多延後至月底執行
+- 長期目標：降低平均成本，而非抓轉折
+"""
+
+    return report
