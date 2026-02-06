@@ -70,7 +70,7 @@ def manual_trigger():
 # --- 核心監控線程 ---
 def monitor_loop():
     print("🤖 監控背景線程已啟動...", flush=True)
-    time.sleep(10) # 讓 Flask 優先綁定 Port
+    time.sleep(300) # 讓 Flask 優先綁定 Port
     
     while True:
         try:
