@@ -9,6 +9,13 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 
+# ==== 強制設定：防止伺服器環境卡死與字體緩存問題 ====
+import matplotlib
+matplotlib.use('Agg') 
+import logging
+logging.getLogger('matplotlib.font_manager').disabled = True
+# ===============================================
+
 # ==== AI 模組 (確保 ai_expert.py 存在) ====
 try:
     from ai_expert import get_us_ai_point
@@ -16,29 +23,37 @@ except ImportError:
     print("⚠️ 找不到 ai_expert 模組，AI 判斷功能將跳過")
     get_us_ai_point = None
 
-# ==== 中文字體設定 (Linux/Render) ====
+# ==== 中文字體設定 (優化：延遲載入並明確指定路徑) ====
 def setup_chinese_font():
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     os.makedirs(static_dir, exist_ok=True)
     font_path = os.path.join(static_dir, "NotoSansTC-Regular.otf")
+    
+    # 1. 檢查並下載字體 (加上 Timeout 防止卡死)
     if not os.path.exists(font_path):
         url = "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
         try:
-            r = requests.get(url, timeout=30)
+            print("📥 正在下載中文字體以解決亂碼問題...")
+            r = requests.get(url, timeout=45)
+            r.raise_for_status()
             with open(font_path, 'wb') as f:
                 f.write(r.content)
             print("✅ 中文字體下載完成")
         except Exception as e:
             print(f"⚠️ 字體下載失敗: {e}")
-            return
-    try:
-        fm.fontManager.addfont(font_path)
-        plt.rcParams['font.family'] = fm.FontProperties(fname=font_path).get_name()
-        plt.rcParams['axes.unicode_minus'] = False
-    except:
-        print("⚠️ 字體設定失敗，可能出現中文亂碼")
+            return None
 
-setup_chinese_font()
+    # 2. 註冊字體
+    try:
+        # 使用字體路徑建立屬性物件，這在 Linux/Render 最保險
+        fe = fm.FontEntry(fname=font_path, name='NotoSansTC')
+        fm.fontManager.ttflist.append(fe)
+        plt.rcParams['font.family'] = fe.name
+        plt.rcParams['axes.unicode_minus'] = False # 解決負號亂碼
+        return fm.FontProperties(fname=font_path)
+    except Exception as e:
+        print(f"⚠️ 字體設定異常: {e}")
+        return None
 
 # ==== 環境變數與設定 ====
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
@@ -49,7 +64,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 PLOT_FILE = os.path.join(STATIC_DIR, "plot.png")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-# ==== 技術指標計算 ====
+# ==== 技術指標計算 (不變) ====
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = delta.where(delta > 0, 0).ewm(alpha=1/period, adjust=False).mean()
@@ -62,7 +77,7 @@ def compute_macd(series):
     exp2 = series.ewm(span=26, adjust=False).mean()
     dif = exp1 - exp2
     dea = dif.ewm(span=9, adjust=False).mean()
-    return dif - dea # 回傳柱狀圖 (Histogram)
+    return dif - dea
 
 def compute_bollinger(series, window=20, std_dev=2):
     ma = series.rolling(window=window).mean()
@@ -72,10 +87,13 @@ def compute_bollinger(series, window=20, std_dev=2):
 def fetch_data(symbol, period="30d"):
     return yf.Ticker(symbol).history(period=period, auto_adjust=True)
 
-# ==== 圖表生成 (三層專業儀表板) ====
+# ==== 圖表生成 (修正：傳入 font_prop 解決亂碼) ====
 def plot_chart(dfs):
+    # 取得字體屬性
+    font_prop = setup_chinese_font()
+    
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12,14), sharex=True, gridspec_kw={'height_ratios':[5,2,2]})
-    main_sym = "^GSPC" # 以標普500為主要基準
+    main_sym = "^GSPC"
     colors = ['tab:blue','tab:orange','tab:green','tab:red']
 
     for i, (symbol, df) in enumerate(dfs.items()):
@@ -83,7 +101,6 @@ def plot_chart(dfs):
         color = colors[i % len(colors)]
         name = TARGETS_MAP.get(symbol, symbol)
         
-        # 1. 主圖：標準化價格 + 布林通道 (針對主標的)
         norm_ratio = 100 / df['Close'].iloc[0]
         ax1.plot(df.index, df['Close'] * norm_ratio, label=name, color=color, linewidth=1.5)
 
@@ -92,24 +109,23 @@ def plot_chart(dfs):
             ax1.plot(df.index, ma*norm_ratio, color='gray', linestyle='--', alpha=0.5, label=f"{name} 20MA")
             ax1.fill_between(df.index, lower*norm_ratio, upper*norm_ratio, color='gray', alpha=0.1)
             
-            # 2. 中圖：MACD 動能柱
             hist = compute_macd(df['Close'])
             ax2.bar(df.index, hist, color=['red' if h>0 else 'green' for h in hist], alpha=0.7)
-            ax2.set_title(f"{name} MACD 動能柱", fontsize=10)
+            ax2.set_title(f"{name} MACD 動能柱", fontproperties=font_prop, fontsize=10)
 
-        # 3. 下圖：RSI 對比
         rsi = compute_rsi(df['Close'])
         ax3.plot(df.index, rsi, label=name, color=color, linewidth=1, linestyle='--')
 
-    ax1.set_title("美股多維度決策儀表板", fontsize=16, fontweight='bold')
-    ax1.legend(loc='upper left', ncol=2); ax1.grid(True, alpha=0.3)
-    ax2.grid(True, alpha=0.3)
+    # 設定標題與標籤 (明確傳入字體屬性)
+    ax1.set_title("美股多維度決策儀表板", fontproperties=font_prop, fontsize=16, fontweight='bold')
+    ax1.legend(loc='upper left', ncol=2, prop=font_prop)
+    ax1.grid(True, alpha=0.3)
+    
     ax3.axhline(70, color='red', linestyle=':', alpha=0.6)
     ax3.axhline(30, color='green', linestyle=':', alpha=0.6)
-    ax3.fill_between(df.index, 70, 100, color='red', alpha=0.05)
-    ax3.fill_between(df.index, 0, 30, color='green', alpha=0.05)
     ax3.set_ylim(0,100)
-    ax3.set_title("RSI 相對強弱熱度", fontsize=10)
+    ax3.set_title("RSI 相對強弱熱度", fontproperties=font_prop, fontsize=10)
+    
     plt.xticks(rotation=45)
     ax3.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
     plt.tight_layout()
@@ -117,7 +133,7 @@ def plot_chart(dfs):
     plt.close()
     return PLOT_FILE
 
-# ==== 報告生成 (詳細豐富版) ====
+# ==== 報告生成 (不變) ====
 def generate_report(dfs, ai_signal):
     us_eastern = timezone(timedelta(hours=-5))
     report_date = datetime.now(us_eastern).strftime("%Y-%m-%d")
@@ -129,15 +145,10 @@ def generate_report(dfs, ai_signal):
         last = df['Close'].iloc[-1]; prev = df['Close'].iloc[-2]
         pct = (last/prev-1)*100
         
-        # 指標計算
-        rsi_val = compute_rsi(df['Close']).iloc[-1]
+        rsi_series = compute_rsi(df['Close'])
+        rsi_val = rsi_series.iloc[-1]
         rebound_prob = max(0, min(100, 100 - rsi_val))
         
-        # 動能與均線判斷
-        closes = df['Close'].iloc[-4:]
-        diffs = closes.diff().dropna()
-        up_days = sum(1 for d in diffs if d > 0)
-        down_days = sum(1 for d in diffs if d < 0)
         ma5 = df['Close'].rolling(5).mean().iloc[-1]
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
         
@@ -147,44 +158,47 @@ def generate_report(dfs, ai_signal):
         else: trend = "🟠空頭反彈"
 
         name = TARGETS_MAP.get(symbol, symbol)
-        report += (
-            f"【{name}】 {last:,.2f} ({pct:+.2f}%)\n"
-            f"趨勢: {trend} | RSI: {rsi_val:.1f}\n"
-            f"短線動能: 📈反彈{up_days*33:.0f}分 vs 📉下跌{down_days*33:.0f}分\n"
-            f"機率試算: 反彈機率{rebound_prob:.0f}%\n"
-            "------------------------\n"
-        )
+        report += (f"【{name}】 {last:,.2f} ({pct:+.2f}%)\n"
+                   f"趨勢: {trend} | RSI: {rsi_val:.1f}\n"
+                   f"機率試算: 反彈機率{rebound_prob:.0f}%\n"
+                   "------------------------\n")
     
-    # 整合 AI 決策
-    report += f"🤖 AI 決策中心：{ai_signal.get('decision', '分析中')} "
-    report += f"(信心度 {ai_signal.get('confidence', 0)}%)\n"
-    
+    report += f"🤖 AI 決策：{ai_signal.get('decision', '分析中')}\n"
     now_tw = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
-    report += f"\n(台灣時間 {now_tw} 發送)"
+    report += f"(台灣時間 {now_tw} 發送)"
     return report
 
-# ==== LINE 推播 ====
+# ==== LINE 推播 (優化渲染 URL) ====
 def push_line(report, plot_path=None):
-    if not LINE_TOKEN or not USER_ID:
-        print("⚠️ LINE 未設定\n", report); return
-
+    if not LINE_TOKEN or not USER_ID: return
     headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
-    requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json={"to": USER_ID, "messages":[{"type":"text","text":report}]}, timeout=15)
+    
+    # 傳送文字
+    requests.post("https://api.line.me/v2/bot/message/push", 
+                  headers=headers, 
+                  json={"to": USER_ID, "messages":[{"type":"text","text":report}]}, 
+                  timeout=15)
 
+    # 傳送圖片 (Render 專用)
     if plot_path and os.path.exists(plot_path):
         base_url = os.environ.get("RENDER_EXTERNAL_URL")
         if base_url:
             plot_url = f"{base_url}/static/plot.png?t={int(datetime.now().timestamp())}"
-            requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json={"to": USER_ID, "messages":[{"type":"image","originalContentUrl":plot_url,"previewImageUrl":plot_url}]}, timeout=15)
+            requests.post("https://api.line.me/v2/bot/message/push", 
+                          headers=headers, 
+                          json={"to": USER_ID, "messages":[{"type":"image","originalContentUrl":plot_url,"previewImageUrl":plot_url}]}, 
+                          timeout=15)
 
 # ==== 主任務 ====
 def run_us_post_market():
     print("🚀 啟動美股盤後分析任務...")
+    # 確保字體環境
+    setup_chinese_font()
+    
     dfs = {s: fetch_data(s) for s in TARGETS}
     dfs = {s: df for s, df in dfs.items() if not df.empty}
     if not dfs: return
 
-    # 先算 AI 訊號
     ai_signal = {"decision": "觀望", "confidence": 0}
     if get_us_ai_point:
         try:
@@ -195,23 +209,17 @@ def run_us_post_market():
     report = generate_report(dfs, ai_signal)
     plot_path = plot_chart(dfs)
     push_line(report, plot_path)
-    print("✅ 任務完成")
-    return ai_signal
+    print("✅ 美股分析任務完成")
 
-# ==== 排程模式 (供 main.py 呼叫) ====
 def schedule_job():
     import schedule, time
     run_time = "05:05" 
     schedule.every().day.at(run_time).do(run_us_post_market)
-    print(f"📅 [美股排程] 已掛載，基準時間: {run_time} (依據 TZ 環境變數)")
+    print(f"📅 [美股排程] 已掛載，基準時間: {run_time}")
     while True:
         schedule.run_pending()
-        time.sleep(30) # 縮短輪詢間隔
+        time.sleep(30)
 
 if __name__=="__main__":
-    # 本地測試時建議將 TEST_MODE 設為 True
-    TEST_MODE = True
-    if TEST_MODE:
-        run_us_post_market()
-    else:
-        schedule_job()
+    # 本地測試或 Render 初次部署測試
+    run_us_post_market()
