@@ -108,16 +108,17 @@ def run_grid():
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     
+    # 標題加重，放大字體
     report = [
-        f"# 🦅 AI 萬元網格實驗報告 [{now:%Y-%m-%d}]",
-        f"**實驗資金總額:** `{TEST_CAPITAL:,} TWD`",
-        "=========================="
+        f"# 🦅 AI 萬元網格實驗報告",
+        f"### 📅 報告時間: `{now:%Y-%m-%d %H:%M}`",
+        f"**💰 實驗總金:** `{TEST_CAPITAL:,} TWD`",
+        "=============================="
     ]
     
     dfs_all = {}
     for symbol, cfg in TARGETS.items():
         try:
-            # 增加抓取長度以確保 MA60 計算準確
             df = yf.download(symbol, period="8mo", interval="1d", progress=False)
             if df.empty: continue
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -125,22 +126,24 @@ def run_grid():
             data = compute_advanced_grid(df)
             dfs_all[symbol] = df
             
-            # 計算一萬元分配到該標的的預計每格買入金額
+            # 股數計算：該標的分派金額 / 5格 / 預計買入價 (無條件捨去取整數)
             alloc_total = TEST_CAPITAL * cfg['weight']
-            per_grid = alloc_total / 5 # 假設分五層網格
+            per_grid_cash = alloc_total / 5
+            suggested_shares = int(per_grid_cash // data['grid_buy']) if data['grid_buy'] > 0 else 0
             
-            report.append(f"### 📍 {cfg['name']}")
-            report.append(f"💰 現價: `{data['price']:.2f}` | **趨勢: {data['trend']}**")
-            report.append(f"📊 RSI: `{data['rsi']:.1f}` | ATR(14): `{data['atr']:.2f}`")
-            report.append(f"🛡️ 布林區間: `{data['bb_lower']:.2f}` - `{data['bb_upper']:.2f}`")
-            report.append(f"📥 **動態補倉建議**: `{data['grid_buy']:.2f}` (預計投入: {per_grid:.0f}元)")
+            # 趨勢與點位通知
+            notify_tag = "⚠️ **🔔 [點位接近通知]**" if data['price'] <= (data['grid_buy'] * 1.005) else ""
+            
+            report.append(f"## 📍 {cfg['name']}")
+            report.append(f"💰 **目前現價**: `{data['price']:.2f}`")
+            report.append(f"📈 **趨勢矩陣**: {data['trend']}")
+            report.append(f"🎯 **預計補倉**: `{data['grid_buy']:.2f}` {notify_tag}")
+            report.append(f"📝 **下單指令**: `買入 {suggested_shares} 股`")
             report.append("-" * 25)
             
         except Exception as e:
-            report.append(f"❌ {symbol} 分析失敗: {str(e)[:50]}")
+            report.append(f"❌ {symbol} 異常: {str(e)[:50]}")
 
-    report.append(f"🤖 **經理人決策**: 六維度矩陣已完成掃描。")
-    report.append(f"\n(台灣時間 {now:%H:%M} 即時分析)")
-    
+    report.append(f"🤖 **經理人決策**: 六維度矩陣掃描完成，監測中。")
     img_buf = generate_grid_chart(dfs_all)
     return "\n".join(report), img_buf
