@@ -5,13 +5,13 @@ import threading
 from flask import Flask
 from datetime import datetime, timedelta, timezone
 
-# 路徑強化，確保模組能抓到
+# 路徑強化
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from monitor_009816 import run_009816_monitor
     from new_ten_thousand_grid import run_unified_experiment
-    from us_post_market_robot import run_us_post_market, schedule_job
+    from us_post_market_robot import schedule_job
 except ImportError as e:
     print(f"❌ 導入失敗：{e}")
 
@@ -22,66 +22,50 @@ def get_now_tw():
 
 def is_market_open():
     now_tw = get_now_tw()
-    if now_tw.weekday() >= 5:
-        return False
+    if now_tw.weekday() >= 5: return False
     return 9 <= now_tw.hour <= 13
 
-# === 中央巡檢線程 ===
 def master_monitor_loop():
-    """中央監控線程：存股 + 網格 AI 判斷"""
-    print("🤖 中央監控系統啟動：全量巡檢模式...")
-    time.sleep(20)  # 啟動冷卻，避開 API 巔峰
-
+    print("🤖 中央監控系統：全量巡檢線程啟動...")
     while True:
         try:
             now_tw = get_now_tw()
             if is_market_open():
                 print(f"--- 執行全面巡檢 {now_tw.strftime('%H:%M')} ---")
-
-                # === 1️⃣ 存股009816 AI判斷 ===
-                print("🦅 執行 009816 存股判斷...")
+                
+                # 1️⃣ 執行台股 009816 監控 (含圖表與 AI)
                 run_009816_monitor()
-                time.sleep(60)  # 確保 AI 配額安全
+                
+                # 💡 防止 API 碰撞：錯開 60 秒再執行下一個 AI 任務
+                time.sleep(60) 
 
-                # === 2️⃣ 一萬元網格實驗 ===
-                print("📊 執行萬元網格 AI 實驗...")
+                # 2️⃣ 執行一萬元網格實驗
                 run_unified_experiment()
-                time.sleep(240)  # 總循環 5 分鐘，扣除上方等待
-
+                
+                # 每輪巡檢完睡 5 分鐘
+                time.sleep(240) 
             else:
-                print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，監控暫停中...")
-                time.sleep(300)  # 👈 改成 5 分鐘檢查一次，確保開盤不延遲
-
+                print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，巡檢暫停中...")
+                time.sleep(300) # 5 分鐘檢查一次
         except Exception as e:
             print(f"⚠️ 中央監控異常: {e}")
             time.sleep(60)
 
-# === Flask 路由 ===
 @app.route('/')
 def home():
     now_tw = get_now_tw()
-    return f"<h1>🦅 經理人全面監控中</h1><p>時間：{now_tw.strftime('%H:%M:%S')}</p>"
-
-@app.route('/us_post_market')
-def trigger_us_post_market():
-    """手動觸發美股盤後分析"""
-    try:
-        print("🚀 手動觸發美股盤後分析...")
-        run_us_post_market()
-        return "美股盤後分析已執行 ✅"
-    except Exception as e:
-        return f"❌ 執行失敗: {e}"
+    return f"<h1>🦅 經理人全面監控中</h1><p>台北時間：{now_tw.strftime('%Y-%m-%d %H:%M:%S')}</p>"
 
 if __name__ == "__main__":
-    # 1. 啟動台股巡檢 (master_monitor_loop)
-    t_taiwan = threading.Thread(target=master_monitor_loop, daemon=True)
-    t_taiwan.start()
-    print("✅ 台股巡檢線程啟動")
+    # 啟動台股監控線程
+    t_tw = threading.Thread(target=master_monitor_loop, daemon=True)
+    t_tw.start()
+    print("✅ 台股即時巡檢線程已掛載")
 
-    # 2. 啟動美股排程 (修正：新增這段)
+    # 啟動美股 05:05 排程線程
     t_us = threading.Thread(target=schedule_job, daemon=True)
     t_us.start()
-    print("✅ 美股 05:05 排程線程啟動")
+    print("✅ 美股 05:05 排程線程已掛載")
     
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
