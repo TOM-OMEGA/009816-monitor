@@ -5,18 +5,18 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 import matplotlib
+import time  # ✅ 補上原本缺失的導入
 matplotlib.use('Agg')
 import logging
 logging.getLogger('matplotlib.font_manager').disabled = True
 
-# ==== AI 模組 (確保 ai_expert.py 存在) ====
+# ==== AI 模組 ====
 try:
     from ai_expert import get_us_ai_point
 except ImportError:
-    print("⚠️ 找不到 ai_expert 模組，AI 判斷功能將跳過")
     get_us_ai_point = None
 
-# ==== 中文字體設定 ====
+# ==== 中文字體設定 (保持不變) ====
 def setup_chinese_font():
     import matplotlib.font_manager as fm
     import matplotlib.pyplot as plt
@@ -26,34 +26,25 @@ def setup_chinese_font():
     if not os.path.exists(font_path):
         url = "https://raw.githubusercontent.com/googlefonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf"
         try:
-            print("📥 正在下載中文字體...")
             r = requests.get(url, timeout=45)
             r.raise_for_status()
             with open(font_path, 'wb') as f:
                 f.write(r.content)
-            print("✅ 中文字體下載完成")
-        except Exception as e:
-            print(f"⚠️ 字體下載失敗: {e}")
-            return None
+        except: return None
     try:
         fe = fm.FontEntry(fname=font_path, name='NotoSansTC')
         fm.fontManager.ttflist.append(fe)
         plt.rcParams['font.family'] = fe.name
         plt.rcParams['axes.unicode_minus'] = False
         return fm.FontProperties(fname=font_path)
-    except Exception as e:
-        print(f"⚠️ 字體設定異常: {e}")
-        return None
+    except: return None
 
-# ==== 環境變數與設定 ====
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL")
+# ==== 設定與技術指標 (保持不變) ====
 TARGETS_MAP = {"^GSPC": "標普500", "^DJI": "道瓊工業", "^IXIC": "那斯達克", "TSM": "台積電ADR"}
 TARGETS = list(TARGETS_MAP.keys())
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 PLOT_FILE = os.path.join(STATIC_DIR, "plot.png")
-os.makedirs(STATIC_DIR, exist_ok=True)
 
-# ==== 技術指標 ====
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = delta.where(delta > 0, 0).ewm(alpha=1/period, adjust=False).mean()
@@ -64,9 +55,7 @@ def compute_rsi(series, period=14):
 def compute_macd(series):
     exp1 = series.ewm(span=12, adjust=False).mean()
     exp2 = series.ewm(span=26, adjust=False).mean()
-    dif = exp1 - exp2
-    dea = dif.ewm(span=9, adjust=False).mean()
-    return dif - dea
+    return (exp1 - exp2) - (exp1 - exp2).ewm(span=9, adjust=False).mean()
 
 def compute_bollinger(series, window=20, std_dev=2):
     ma = series.rolling(window=window).mean()
@@ -76,67 +65,15 @@ def compute_bollinger(series, window=20, std_dev=2):
 def fetch_data(symbol, period="30d"):
     try:
         return yf.Ticker(symbol).history(period=period, auto_adjust=True, timeout=10)
-    except Exception as e:
-        print(f"⚠️ 無法抓取 {symbol}: {e}")
-        return pd.DataFrame()
-
-# ==== Discord 發送 (文字+圖片) ====
-def send_discord(msg: str = None, file_path: str = None):
-    if not DISCORD_WEBHOOK:
-        print("⚠️ 無法推播：DISCORD_WEBHOOK_URL 未設定")
-        return False
-
-    # 發送文字
-    if msg:
-        max_len = 1900
-        for start in range(0, len(msg), max_len):
-            part = msg[start:start+max_len]
-            for attempt in range(5):
-                try:
-                    r = requests.post(DISCORD_WEBHOOK, json={"content": part}, timeout=15)
-                    if r.status_code == 429:
-                        retry = r.json().get("retry_after", 5)
-                        print(f"⚠️ Discord 限流 429，等待 {retry} 秒重試 ({attempt+1}/5)")
-                        time.sleep(retry)
-                        continue
-                    r.raise_for_status()
-                    print(f"✅ Discord 發送成功，狀態碼 {r.status_code}")
-                    break
-                except Exception as e:
-                    wait = 2 ** attempt
-                    print(f"⚠️ Discord 發送失敗: {e}，等待 {wait} 秒後重試")
-                    time.sleep(wait)
-            else:
-                print("❌ Discord 發送多次失敗，跳過此段訊息")
-
-    # 發送圖片
-    if file_path and os.path.exists(file_path):
-        for attempt in range(5):
-            try:
-                with open(file_path, "rb") as f:
-                    r = requests.post(DISCORD_WEBHOOK, files={"file": f}, timeout=30)
-                if r.status_code == 429:
-                    retry = r.json().get("retry_after", 5)
-                    print(f"⚠️ Discord 限流 429 圖片，等待 {retry} 秒重試 ({attempt+1}/5)")
-                    time.sleep(retry)
-                    continue
-                r.raise_for_status()
-                print(f"✅ Discord 圖片發送成功，狀態碼 {r.status_code}")
-                break
-            except Exception as e:
-                wait = 2 ** attempt
-                print(f"⚠️ Discord 圖片發送失敗: {e}，等待 {wait} 秒後重試")
-                time.sleep(wait)
-        else:
-            print("❌ Discord 圖片發送多次失敗，跳過")
-    return True
+    except: return pd.DataFrame()
 
 # ==== 圖表生成 ====
 def plot_chart(dfs):
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
-
     font_prop = setup_chinese_font()
+    if not font_prop: return None
+    
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12,14), sharex=True, gridspec_kw={'height_ratios':[5,2,2]})
     main_sym = "^GSPC"
     colors = ['tab:blue','tab:orange','tab:green','tab:red']
@@ -145,27 +82,20 @@ def plot_chart(dfs):
         if df.empty: continue
         color = colors[i % len(colors)]
         name = TARGETS_MAP.get(symbol, symbol)
-        norm_ratio = 100 / df['Close'].iloc[0]
-        ax1.plot(df.index, df['Close']*norm_ratio, label=name, color=color, linewidth=1.5)
+        norm = 100 / df['Close'].iloc[0]
+        ax1.plot(df.index, df['Close']*norm, label=name, color=color)
         if symbol == main_sym:
             upper, ma, lower = compute_bollinger(df['Close'])
-            ax1.plot(df.index, ma*norm_ratio, color='gray', linestyle='--', alpha=0.5, label=f"{name} 20MA")
-            ax1.fill_between(df.index, lower*norm_ratio, upper*norm_ratio, color='gray', alpha=0.1)
+            ax1.fill_between(df.index, lower*norm, upper*norm, color='gray', alpha=0.1)
             hist = compute_macd(df['Close'])
             ax2.bar(df.index, hist, color=['red' if h>0 else 'green' for h in hist], alpha=0.7)
-            ax2.set_title(f"{name} MACD 動能柱", fontproperties=font_prop, fontsize=10)
         rsi = compute_rsi(df['Close'])
-        ax3.plot(df.index, rsi, label=name, color=color, linewidth=1, linestyle='--')
+        ax3.plot(df.index, rsi, label=name, color=color, linestyle='--')
 
-    ax1.set_title("美股多維度決策儀表板", fontproperties=font_prop, fontsize=16, fontweight='bold')
-    ax1.legend(loc='upper left', ncol=2, prop=font_prop)
-    ax1.grid(True, alpha=0.3)
-    ax3.axhline(70, color='red', linestyle=':', alpha=0.6)
-    ax3.axhline(30, color='green', linestyle=':', alpha=0.6)
-    ax3.set_ylim(0,100)
-    ax3.set_title("RSI 相對強弱熱度", fontproperties=font_prop, fontsize=10)
-    plt.xticks(rotation=45)
-    ax3.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    ax1.set_title("美股多維度決策儀表板", fontproperties=font_prop, fontsize=16)
+    ax1.legend(loc='upper left', prop=font_prop)
+    ax3.axhline(70, color='red', linestyle=':')
+    ax3.axhline(30, color='green', linestyle=':')
     plt.tight_layout()
     plt.savefig(PLOT_FILE, dpi=120)
     plt.close()
@@ -175,53 +105,50 @@ def plot_chart(dfs):
 def generate_report(dfs, ai_signal):
     us_eastern = timezone(timedelta(hours=-5))
     report_date = datetime.now(us_eastern).strftime("%Y-%m-%d")
-    report = f"🦅 美股盤後快報 [{report_date}]\n========================\n"
+    report = f"🌎 **美股盤後快報 [{report_date}]**\n"
 
     for symbol, df in dfs.items():
         if len(df) < 20: continue
         last = df['Close'].iloc[-1]; prev = df['Close'].iloc[-2]
         pct = (last/prev-1)*100
-        rsi_series = compute_rsi(df['Close'])
-        rsi_val = rsi_series.iloc[-1]
-        rebound_prob = max(0, min(100, 100 - rsi_val))
+        rsi_val = compute_rsi(df['Close']).iloc[-1]
+        
         ma5 = df['Close'].rolling(5).mean().iloc[-1]
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
-        if ma5>ma20 and last>ma5: trend = "🟢強勢多頭"
-        elif ma5>ma20: trend = "🟡多頭回檔"
-        elif ma5<ma20 and last<ma5: trend = "🔴強勢空頭"
-        else: trend = "🟠空頭反彈"
+        if ma5>ma20 and last>ma5: trend = "🟢 強勢"
+        elif ma5<ma20 and last<ma5: trend = "🔴 空頭"
+        else: trend = "🟡 震盪"
+        
         name = TARGETS_MAP.get(symbol, symbol)
-        report += (f"【{name}】 {last:,.2f} ({pct:+.2f}%)\n"
-                   f"趨勢: {trend} | RSI: {rsi_val:.1f}\n"
-                   f"機率試算: 反彈機率{rebound_prob:.0f}%\n"
-                   "------------------------\n")
-    report += f"🤖 AI 決策：{ai_signal.get('decision', '分析中')}\n"
-    now_tw = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
-    report += f"(台灣時間 {now_tw} 發送)"
+        report += f"• {name}: `{last:,.1f}` ({pct:+.2f}%) | RSI: `{rsi_val:.0f}` | {trend}\n"
+    
+    report += f"🤖 **AI 決策**: {ai_signal.get('decision', '分析中')}\n"
     return report
 
-# ==== 主任務 ====
+# ==== ✅ 標準入口（給 main.py 用）====
 def run_us_ai():
-    print("🚀 啟動美股盤後分析任務...")
-    setup_chinese_font()
+    logging.info("🚀 開始美股分析任務...")
     dfs = {s: fetch_data(s) for s in TARGETS}
     dfs = {s: df for s, df in dfs.items() if not df.empty}
+    
     if not dfs: 
-        print("⚠️ 無法取得美股數據，任務結束")
-        send_discord("⚠️ 無法取得美股數據，任務結束")
-        return "❌ 無數據"
+        return "❌ 美股數據抓取失敗"
 
-    ai_signal = {"decision": "觀望", "confidence": 0}
+    ai_signal = {"decision": "觀望"}
     if get_us_ai_point:
         try:
             us_ai_data = {sym: {"last_close": df['Close'].iloc[-1]} for sym, df in dfs.items()}
-            # 移除 target_name 參數以避免錯誤
             ai_signal = get_us_ai_point(extra_data=us_ai_data)
         except Exception as e:
-            print(f"⚠️ AI 判斷失敗: {e}")
+            logging.error(f"AI 判斷異常: {e}")
 
     report = generate_report(dfs, ai_signal)
-    plot_path = plot_chart(dfs)
-    send_discord(report, file_path=plot_path)
-    print("✅ 美股分析任務完成")
+    
+    # 僅生成圖片不發送，若需要發送圖片，需在 main.py 另行處理
+    try:
+        plot_chart(dfs)
+        logging.info(f"✅ 圖表已生成於 {PLOT_FILE}")
+    except Exception as e:
+        logging.error(f"圖表生成失敗: {e}")
+
     return report
