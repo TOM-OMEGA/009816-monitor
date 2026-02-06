@@ -4,6 +4,12 @@ from datetime import datetime, timezone, timedelta
 from ai_expert import get_ai_point
 from data_engine import get_high_level_insight
 from decision_logger import log_decision
+import pandas as pd
+
+# --- 強制修復：防止伺服器環境卡死 ---
+import matplotlib
+matplotlib.use('Agg')
+# -------------------------------
 
 # ================= 設定 =================
 LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
@@ -11,7 +17,7 @@ USER_ID = os.environ.get("USER_ID")
 LEDGER_FILE = "ledger.json"
 
 GRID_LEVELS = 5
-GRID_GAP_PCT = 0.03          # 3%
+GRID_GAP_PCT = 0.03      # 3%
 TAKE_PROFIT_PCT = 0.05      # 5%
 
 TARGETS = {
@@ -23,19 +29,25 @@ TARGETS = {
 # ================= 工具 =================
 def load_ledger():
     if os.path.exists(LEDGER_FILE):
-        return json.load(open(LEDGER_FILE, "r", encoding="utf-8"))
+        try:
+            with open(LEDGER_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
     return {}
 
 def save_ledger(l):
-    json.dump(l, open(LEDGER_FILE,"w",encoding="utf-8"), indent=2, ensure_ascii=False)
+    with open(LEDGER_FILE, "w", encoding="utf-8") as f:
+        json.dump(l, f, indent=2, ensure_ascii=False)
 
 def safe_ai(extra, name, summary):
     try:
         return get_ai_point(extra, name, summary_override=summary)
     except Exception as e:
-        return {"decision":"AI失效，保守處理","reason":str(e)}
+        return {"decision": "觀望", "reason": f"AI失效: {str(e)[:20]}"}
 
 def trend_check(df):
+    if len(df) < 60: return "🟡 數據不足"
     ma20 = df['Close'].rolling(20).mean().iloc[-1]
     ma60 = df['Close'].rolling(60).mean().iloc[-1]
     c = df['Close'].iloc[-1]
@@ -44,7 +56,7 @@ def trend_check(df):
     return "🟡 盤整"
 
 def build_grid(price):
-    return [round(price*(1-GRID_GAP_PCT*(i+1)),2) for i in range(GRID_LEVELS)]
+    return [round(price*(1-GRID_GAP_PCT*(i+1)), 2) for i in range(GRID_LEVELS)]
 
 # ================= 主程式 =================
 def run_unified_experiment():
@@ -52,38 +64,50 @@ def run_unified_experiment():
     now = datetime.now(timezone(timedelta(hours=8)))
     report = [f"🦅 AI 存股網格 {now:%Y-%m-%d %H:%M}", "-"*20]
 
-    for symbol,cfg in TARGETS.items():
+    
+
+    for symbol, cfg in TARGETS.items():
         try:
-            df = yf.Ticker(symbol).history(period="6mo").ffill()
-            if df.empty: continue
+            # 加入 timeout 與數據清洗
+            df = yf.Ticker(symbol).history(period="6mo", timeout=15)
+            if df.empty:
+                report.append(f"❌ {cfg['name']} 抓不到數據"); continue
+            df = df.ffill().dropna(subset=['Close'])
 
             price = float(df['Close'].iloc[-1])
             trend = trend_check(df)
 
-            # RSI
+            # RSI 計算強化
             delta = df['Close'].diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
-            rs = gain / loss.replace(0,1e-6)
-            rsi = 100 - 100/(1+rs.iloc[-1])
+            
+            last_gain = gain.iloc[-1] if not gain.empty else 0
+            last_loss = loss.iloc[-1] if not loss.empty else 0
+            
+            if last_loss == 0:
+                rsi = 100.0 if last_gain > 0 else 50.0
+            else:
+                rsi = 100 - 100/(1 + (last_gain / last_loss))
 
-            # 月內高低
+            # 月內高低 (加入防空保護)
             month_df = df[df.index.month == now.month]
+            if month_df.empty: month_df = df.tail(20) # 跨月首日保護
             month_low = month_df['Low'].min()
-            month_high = month_df['High'].max()
-            dist_low = (price/month_low-1)*100
+            dist_low = (price/month_low-1)*100 if month_low > 0 else 0
 
-            extra = get_high_level_insight(symbol)
+            extra = get_high_level_insight(symbol) or {}
             summary = (
                 f"現價:{price:.2f}, 月低:{month_low:.2f}, "
                 f"距低:{dist_low:.2f}%, RSI:{rsi:.1f}, 趨勢:{trend}"
             )
 
             ai = safe_ai(extra, cfg["name"], summary)
-            allow_buy = "可行" in ai.get("decision","")
+            ai_decision = ai.get("decision", "")
+            allow_buy = "可行" in ai_decision or "買入" in ai_decision
 
-            book = ledger.get(symbol,{
-                "shares":0,"cost":0.0,"grid":{}
+            book = ledger.get(symbol, {
+                "shares": 0, "cost": 0.0, "grid": {}
             })
 
             report.append(
@@ -93,52 +117,60 @@ def run_unified_experiment():
             )
 
             if "🔴" in trend:
-                report.append("⛔ 趨勢轉空，停機")
+                report.append("⛔ 趨勢轉空，網格暫停")
             else:
                 grid = build_grid(price)
                 per_cap = cfg["cap"]/GRID_LEVELS
 
+                # 買入邏輯
                 if allow_buy:
-                    for i,gp in enumerate(grid):
-                        if price<=gp and str(i) not in book["grid"]:
+                    for i, gp in enumerate(grid):
+                        if price <= gp and str(i) not in book["grid"]:
                             qty = int(per_cap/price)
-                            if qty>0:
-                                book["grid"][str(i)]={"price":price,"qty":qty}
-                                book["shares"]+=qty
-                                book["cost"]+=qty*price
+                            if qty > 0:
+                                book["grid"][str(i)] = {"price": price, "qty": qty}
+                                book["shares"] += qty
+                                book["cost"] += qty * price
                                 report.append(f"🧩 買入 第{i+1}格 {qty} 股")
                             break
                 else:
-                    report.append("⏸ AI 未授權")
+                    report.append(f"⏸ AI 建議: {ai_decision}")
 
-                # 反向賣出
-                for k,v in list(book["grid"].items()):
-                    if price>=v["price"]*(1+TAKE_PROFIT_PCT):
-                        book["shares"]-=v["qty"]
-                        book["cost"]-=v["price"]*v["qty"]
+                # 反向賣出 (利潤鎖定)
+                for k, v in list(book["grid"].items()):
+                    if price >= v["price"] * (1 + TAKE_PROFIT_PCT):
+                        book["shares"] -= v["qty"]
+                        book["cost"] -= v["price"] * v["qty"]
                         del book["grid"][k]
-                        report.append(f"💰 賣出 第{int(k)+1}格")
+                        report.append(f"💰 賣出 第{int(k)+1}格 (獲利結清)")
 
-            if book["shares"]>0:
-                avg = book["cost"]/book["shares"]
-                pnl = (price-avg)*book["shares"]
-                report.append(f"📒 持股 {book['shares']} | 成本 {avg:.2f} | 損益 {pnl:.0f}")
+            if book["shares"] > 0:
+                avg = book["cost"] / book["shares"]
+                pnl = (price - avg) * book["shares"]
+                roi = (pnl / book["cost"] * 100) if book["cost"] > 0 else 0
+                report.append(f"📒 持股 {book['shares']} | 均價 {avg:.2f} | 損益 {pnl:.0f} ({roi:.1f}%)")
 
-            ledger[symbol]=book
-            log_decision(symbol, price, ai, trend)
+            ledger[symbol] = book
+            log_decision(symbol, price, ai, (True, trend))
 
         except Exception as e:
-            report.append(f"❌ {symbol} 錯誤 {e}")
+            report.append(f"❌ {symbol} 執行異常: {str(e)[:30]}")
 
     save_ledger(ledger)
 
-    # LINE
+    # LINE 推播服務
     if LINE_TOKEN and USER_ID:
-        for i in range(0,len(report),20):
-            requests.post(
-                "https://api.line.me/v2/bot/message/push",
-                headers={"Authorization":f"Bearer {LINE_TOKEN}"},
-                json={"to":USER_ID,"messages":[{"type":"text","text":"\n".join(report[i:i+20])}]}
-            )
+        headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
+        for i in range(0, len(report), 20):
+            msg = "\n".join(report[i:i+20])
+            try:
+                requests.post(
+                    "https://api.line.me/v2/bot/message/push",
+                    headers=headers,
+                    json={"to": USER_ID, "messages": [{"type": "text", "text": msg}]},
+                    timeout=10
+                )
+            except:
+                print("❌ LINE 推播發送失敗")
 
     return "\n".join(report)
