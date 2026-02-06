@@ -248,7 +248,12 @@ def run_us_ai():
     """
     統一給主控程式呼叫的入口（美股收盤 AI）
     """
-    return run_unified_experiment()
+    try:
+        run_us_post_market()
+        return {"status": "ok", "message": "US post-market AI task completed"}
+    except Exception as e:
+        print(f"❌ 美股 AI 任務失敗: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # 允許單獨執行（本地或 Render 測試用）
