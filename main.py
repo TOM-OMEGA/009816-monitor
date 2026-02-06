@@ -6,7 +6,7 @@ import requests
 from flask import Flask
 from datetime import datetime
 
-# --- 1. 環境隔離：防止繪圖庫在 Linux 無介面環境卡死 ---
+# --- 1. 環境隔離 ---
 import matplotlib
 matplotlib.use('Agg')
 import logging
@@ -15,38 +15,50 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 # 路徑強化
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# --- 2. 安全導入模組 (拆開 try-catch，避免連坐) ---
+run_009816_monitor = None
+run_unified_experiment = None
+schedule_job = None
+
 try:
     from monitor_009816 import run_009816_monitor
+except ImportError as e:
+    print(f"❌ 009816 模組導入失敗: {e}")
+
+try:
     from new_ten_thousand_grid import run_unified_experiment
+except ImportError as e:
+    print(f"❌ 網格模組導入失敗: {e}")
+
+try:
     from us_post_market_robot import schedule_job
 except ImportError as e:
-    print(f"❌ 模組導入失敗：{e}")
+    print(f"❌ 美股模組導入失敗: {e}")
 
 app = Flask(__name__)
 
-# --- 2. 交易時間判斷 (假設 TZ=Asia/Taipei 已設定) ---
+# --- 3. 交易時間判斷 ---
 def is_market_open():
     now = datetime.now()
-    # 0=週一, 4=週五。週末 (5,6) 直接回傳 False
     if now.weekday() >= 5: return False  
-    # 台北時間 09:00 ~ 14:00 (含收盤清算)
     return 9 <= now.hour <= 14
 
-# --- 3. 核心監控循環 ---
+# --- 4. 核心監控循環 ---
 def master_monitor_loop():
     print("🤖 監控線程已進入 master_monitor_loop")
-    
-    # 💡 啟動即時診斷測試 (強迫發送，確認 LINE 連結)
-    # 增加一個 10 秒緩衝，確保 Flask 已經跑起來
-    time.sleep(10)
-    print("🧪 執行啟動診斷測試 (force_send=True)...")
-    try:
-        # 如果 monitor 內部 API 卡死，這裡會擋住。
-        # 建議搭配我之前給你的「暴力診斷版」monitor 使用
-        run_009816_monitor(force_send=True)
-        print("✅ 啟動診斷任務已觸發過")
-    except Exception as e:
-        print(f"❌ 診斷失敗: {e}")
+    time.sleep(5) # 讓 Flask 先啟動
+
+    # 💡 啟動即時診斷測試
+    print("🧪 執行啟動診斷測試...")
+    if run_009816_monitor:
+        try:
+            # 強制發送測試訊息
+            run_009816_monitor(force_send=True)
+            print("✅ 啟動診斷任務已觸發")
+        except Exception as e:
+            print(f"❌ 診斷執行期間崩潰: {e}")
+    else:
+        print("⚠️ 無法執行診斷：run_009816_monitor 未正確載入")
 
     last_heartbeat_hour = -1
 
@@ -55,20 +67,16 @@ def master_monitor_loop():
             now = datetime.now()
             
             if is_market_open():
-                print(f"🚀 [{now.strftime('%H:%M:%S')}] 市場開放，執行 009816 巡檢...")
-                run_009816_monitor()
+                print(f"🚀 [{now.strftime('%H:%M:%S')}] 盤中巡檢...")
+                if run_009816_monitor: run_009816_monitor()
                 time.sleep(15)
-                run_unified_experiment()
+                if run_unified_experiment: run_unified_experiment()
                 print("✅ 巡檢完畢，休眠 5 分鐘")
                 time.sleep(300)
             else:
-                # --- 非交易時段邏輯 ---
-                # 每小時的第 0 分鐘發送一次 Survival Log 到 Render 
                 if now.hour != last_heartbeat_hour:
-                    print(f"💤 [生存回報] 目前為非交易時段 ({now.strftime('%Y-%m-%d %H:%M')})，系統監理中...")
+                    print(f"💤 [非交易時段] 系統待機中 ({now.strftime('%H:%M')})")
                     last_heartbeat_hour = now.hour
-                
-                # 即使沒開盤，每 10 分鐘在 Log 留個腳印
                 time.sleep(600) 
 
         except Exception as e:
@@ -78,19 +86,27 @@ def master_monitor_loop():
 @app.route('/')
 def home():
     now = datetime.now()
-    return f"🦅 AI Manager Active<br>Server Time: {now.strftime('%Y-%m-%d %H:%M:%S')}<br>Market Open: {is_market_open()}"
+    # 顯示模組載入狀態，方便除錯
+    status = f"""
+    Time: {now}<br>
+    Market Open: {is_market_open()}<br>
+    Modules:<br>
+    - 009816: {'✅' if run_009816_monitor else '❌'}<br>
+    - Grid: {'✅' if run_unified_experiment else '❌'}<br>
+    - US Robot: {'✅' if schedule_job else '❌'}
+    """
+    return status
 
 if __name__ == "__main__":
-    # 1. 優先掛載美股排程 (通常在 05:05 跑)
-    t_us = threading.Thread(target=schedule_job, daemon=True)
-    t_us.start()
+    # 1. 掛載美股排程
+    if schedule_job:
+        t_us = threading.Thread(target=schedule_job, daemon=True)
+        t_us.start()
     
     # 2. 掛載台股巡檢
     t_tw = threading.Thread(target=master_monitor_loop, daemon=True)
     t_tw.start()
     
-    print("✅ 監控線程啟動指令已發出")
-    
-    # 3. 啟動 Flask (Render 必須偵測到這個 Port 起來才算部署成功)
+    print("✅ 線程指令已發出")
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
