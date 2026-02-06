@@ -11,28 +11,9 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 # 路徑強化
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# --- 2. 安全導入模組 ---
-run_009816_monitor = None
-run_unified_experiment = None
-schedule_job = None
-
-try:
-    from monitor_009816 import run_009816_monitor
-except ImportError as e:
-    print(f"❌ 009816 導入失敗: {e}", flush=True)
-
-try:
-    from new_ten_thousand_grid import run_unified_experiment
-except ImportError as e:
-    print(f"❌ 網格導入失敗: {e}", flush=True)
-
-try:
-    from us_post_market_robot import schedule_job
-except ImportError as e:
-    print(f"❌ 美股導入失敗: {e}", flush=True)
-
 app = Flask(__name__)
 
+# --- 2. 交易時間判斷 ---
 def is_market_open():
     now = datetime.now()
     if now.weekday() >= 5: return False  
@@ -41,62 +22,81 @@ def is_market_open():
 @app.route('/')
 def home():
     now = datetime.now()
-    # 檢查環境變數 (隱藏部分資訊以保安全)
-    token = os.environ.get('LINE_ACCESS_TOKEN', '')
-    uid = os.environ.get('USER_ID', '')
-    token_check = f"✅ 已讀取 (前4碼: {token[:4]}...)" if token else "❌ 缺失 (請檢查 Render 設定)"
-    uid_check = f"✅ 已讀取 (開頭: {uid[:5]}...)" if uid else "❌ 缺失 (請檢查 Render 設定)"
+    # 檢查 Discord 環境變數
+    webhook = os.environ.get('DISCORD_WEBHOOK_URL', '')
+    webhook_check = f"✅ 已設定 (後 5 碼: ...{webhook[-5:]})" if webhook else "❌ 缺失 (請在 Render 設定 DISCORD_WEBHOOK_URL)"
     
     return f"""
     <html>
-        <head><title>AI Manager 控制台</title></head>
-        <body style="font-family: sans-serif; padding: 20px; line-height: 1.6;">
+        <head>
+            <title>AI Manager DC 控制台</title>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: sans-serif; padding: 20px; line-height: 1.6; max-width: 600px; margin: auto;">
             <h1>🦅 AI Manager 控制面板</h1>
-            <p>伺服器時間: {now.strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <p style="background: #eee; padding: 10px;">伺服器時間: <b>{now.strftime('%Y-%m-%d %H:%M:%S')}</b></p>
             <hr>
             <h3>系統診斷：</h3>
             <ul>
-                <li>LINE Token: {token_check}</li>
-                <li>User ID: {uid_check}</li>
-                <li>市場狀態: {'🟢 已開盤' if is_market_open() else '🔴 已收盤'}</li>
+                <li>Discord Webhook: {webhook_check}</li>
+                <li>市場狀態: {'🟢 已開盤 (執行巡檢中)' if is_market_open() else '🔴 已收盤 (待機模式)'}</li>
             </ul>
             <hr>
-            <p style="font-size: 1.2em;">👉 <a href="/trigger" style="color: white; background: #00b900; padding: 10px 20px; text-decoration: none; border-radius: 5px;">強制執行 LINE 深度測試</a></p>
+            <p style="font-size: 1.1em;">👉 <a href="/trigger" style="display: inline-block; color: white; background: #5865F2; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">發送 Discord 測試訊息</a></p>
+            <p style="color: #666; font-size: 0.8em;">※ 點擊按鈕後將即時測試 Webhook 連線能力</p>
         </body>
     </html>
     """
 
 @app.route('/trigger')
 def manual_trigger():
-    if not run_009816_monitor:
-        return "❌ 錯誤：monitor_009816 模組未載入"
-    
     try:
-        print("🔥 啟動手動深度診斷...", flush=True)
+        # 使用延遲導入，避免 monitor_009816.py 語法錯誤導致整個 main.py 掛掉
+        from monitor_009816 import run_009816_monitor
+        print("🔥 啟動手動 Discord 診斷...", flush=True)
         result = run_009816_monitor(force_send=True)
-        # result 現在會包含詳細的 LINE 回傳訊息
         return f"""
-        <h2>診斷結果</h2>
-        <div style="background: #f0f0f0; padding: 15px; border-radius: 5px; font-family: monospace;">
-            {result}
+        <div style="font-family: sans-serif; padding: 20px;">
+            <h2>診斷結果回報</h2>
+            <div style="background: #f0f0f0; padding: 15px; border-radius: 5px; font-family: monospace; white-space: pre-wrap;">
+                {result}
+            </div>
+            <br><a href="/">⬅ 返回首頁</a>
         </div>
-        <br><a href="/">返回首頁</a>
         """
     except Exception as e:
-        return f"❌ 系統崩潰: {str(e)}"
+        return f"❌ 系統導入或執行異常: {str(e)}<br>可能是 monitor_009816.py 有語法錯誤，請檢查代碼。"
+
+# --- 核心監控線程 ---
+def monitor_loop():
+    print("🤖 監控背景線程已啟動...", flush=True)
+    time.sleep(10) # 讓 Flask 優先綁定 Port
+    
+    while True:
+        try:
+            if is_market_open():
+                # 開盤期間每 5 分鐘巡檢一次
+                from monitor_009816 import run_009816_monitor
+                from new_ten_thousand_grid import run_unified_experiment
+                
+                print("🚀 執行盤中巡檢任務...", flush=True)
+                run_009816_monitor()
+                time.sleep(10) # 稍微間隔避免過度擠壓
+                run_unified_experiment()
+                
+                time.sleep(300) 
+            else:
+                time.sleep(600) # 非交易時段每 10 分鐘檢查一次
+        except Exception as e:
+            print(f"⚠️ 監控循環發生錯誤: {e}", flush=True)
+            time.sleep(60)
 
 if __name__ == "__main__":
-    if schedule_job:
-        threading.Thread(target=schedule_job, daemon=True).start()
+    # 1. 啟動背景線程
+    t = threading.Thread(target=monitor_loop, daemon=True)
+    t.start()
     
-    def monitor_loop():
-        while True:
-            if is_market_open():
-                if run_009816_monitor: run_009816_monitor()
-                time.sleep(300)
-            time.sleep(600)
-            
-    threading.Thread(target=monitor_loop, daemon=True).start()
-    
+    # 2. 啟動 Flask (Render 必須偵測到 Port)
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    print(f"✅ Flask 正在啟動，監聽 Port: {port}", flush=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
