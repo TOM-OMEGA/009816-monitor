@@ -2,60 +2,57 @@ import os, sys, time, logging, json, threading, requests
 from flask import Flask
 from datetime import datetime
 
-# --- 1. 基本設定 ---
-import matplotlib
-matplotlib.use('Agg')
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+app = Flask(__name__)
 
+# 延遲導入，避免啟動時卡死
 from monitor_009816 import run_taiwan_stock
 from new_ten_thousand_grid import run_grid
 from us_post_market_robot import run_us_ai
 
-app = Flask(__name__)
-WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip() or None
+WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 def send_to_discord(content):
-    if not WEBHOOK or not content: return
-    # 切割訊息以防萬一
-    for i in range(0, len(content), 1900):
-        requests.post(WEBHOOK, json={"content": content[i:i+1900]}, timeout=15)
-
-# =========================
-# 核心背景任務
-# =========================
-def run_all_tasks_and_send():
-    logging.info("🚀 開始背景全自動巡檢...")
+    if not WEBHOOK:
+        logging.error("❌ 未設定 DISCORD_WEBHOOK_URL")
+        return
     
-    # 執行三個模組
+    # 檢查內容是否包含 Cloudflare 錯誤訊息 (預防發送垃圾訊息)
+    if "<!DOCTYPE html>" in content or "Cloudflare" in content:
+        content = "⚠️ 數據抓取失敗：受到 Cloudflare 防火牆阻擋，請稍後再試。"
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    payload = {"content": f"## 🦅 AI 巡檢報告 [{now_str}]\n{content}"[:1990]}
+    
+    try:
+        r = requests.post(WEBHOOK, json=payload, timeout=15)
+        logging.info(f"📡 Discord 回應狀態: {r.status_code}")
+        if r.status_code != 204:
+            logging.error(f"❌ Discord 錯誤回應: {r.text}")
+    except Exception as e:
+        logging.error(f"❌ Discord 連線異常: {e}")
+
+def run_all_tasks_and_send():
+    logging.info("🚀 開始全自動巡檢...")
+    
+    # 執行任務並收集文字
     r1 = str(run_taiwan_stock())
-    time.sleep(5) # 間隔避免 CPU 過載
     r2 = str(run_grid())
-    time.sleep(5)
     r3 = str(run_us_ai())
     
-    # 整合報告
-    full_report = (
-        f"## 🦅 AI 投資綜合報告 ({datetime.now().strftime('%m/%d %H:%M')})\n"
-        f"### 📈 存股分析\n{r1}\n\n"
-        f"### 🧱 網格監控\n{r2}\n\n"
-        f"### 🌎 美股分析\n{r3}"
-    )
+    # 整合並修剪過長的 HTML (如果有的話)
+    full_report = f"### 📈 台股存股\n{r1}\n\n### 🧱 台股網格\n{r2}\n\n### 🌎 美股分析\n{r3}"
     
     send_to_discord(full_report)
-    logging.info("✅ 報告已推播至 Discord")
 
-# =========================
-# 路由設定
-# =========================
 @app.route("/")
 def home():
-    return "<h1>🦅 AI Manager Active</h1><p>點擊 <a href='/run'>/run</a> 啟動背景任務並推播至 Discord。</p>"
+    return f"<h1>🦅 AI Manager</h1><p>Webhook: {'✅ OK' if WEBHOOK else '❌ Missing'}</p><a href='/run'>🚀 執行並推播</a>"
 
 @app.route("/run")
 def manual_run():
     threading.Thread(target=run_all_tasks_and_send).start()
-    return "<h3>🚀 任務已啟動</h3><p>程式正在背景跑，預計 5 分鐘後 Discord 會收到報告。</p>"
+    return "<h3>🚀 已啟動背景計算</h3><p>請於 2-3 分鐘後檢查 Discord。</p>"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
