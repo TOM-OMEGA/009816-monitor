@@ -1,13 +1,13 @@
-import os, sys, time, logging, json
+import os, sys, time, logging, json, threading
 from flask import Flask
 from datetime import datetime
 
-# --- 1. 環境設定與導入 ---
+# --- 1. 環境設定 ---
 import matplotlib
 matplotlib.use('Agg')
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# 確保路徑正確
+# 加入當前路徑
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from monitor_009816 import run_taiwan_stock
@@ -15,92 +15,96 @@ from new_ten_thousand_grid import run_grid
 from us_post_market_robot import run_us_ai
 
 app = Flask(__name__)
+DEBUG_FILE = "debug_result.json"
 
 # =========================
-# 執行任務安全包裝 (回傳原始字串)
+# 背景執行任務
 # =========================
-def safe_run(func, name):
-    try:
-        logging.info(f"🧪 偵錯模式啟動任務: {name}")
-        start_time = time.time()
-        result = func()
-        duration = time.time() - start_time
-        
-        if isinstance(result, dict):
-            result_str = json.dumps(result, ensure_ascii=False, indent=2)
-        else:
-            result_str = str(result)
-            
-        return {
-            "name": name,
-            "content": result_str,
-            "length": len(result_str),
-            "time": round(duration, 2)
-        }
-    except Exception as e:
-        err_msg = f"❌ {name} 執行崩潰: {str(e)}"
-        return {"name": name, "content": err_msg, "length": len(err_msg), "time": 0}
+def background_task():
+    results = []
+    tasks = [
+        (run_taiwan_stock, "台股存股"),
+        (run_grid, "台股網格"),
+        (run_us_ai, "美股盤後")
+    ]
+    
+    for func, name in tasks:
+        try:
+            logging.info(f"⏳ 背景執行中: {name}")
+            start = time.time()
+            res = func()
+            duration = time.time() - start
+            results.append({
+                "name": name, 
+                "content": str(res), 
+                "len": len(str(res)), 
+                "time": f"{duration:.1f}s"
+            })
+        except Exception as e:
+            results.append({"name": name, "content": f"出錯: {e}", "len": 0, "time": "0s"})
+    
+    # 存檔供網頁讀取
+    with open(DEBUG_FILE, "w", encoding="utf-8") as f:
+        json.dump({"updated": datetime.now().strftime("%H:%M:%S"), "data": results}, f, ensure_ascii=False)
+    logging.info("✅ 所有任務背景執行完畢")
 
 # =========================
 # 路由設定
 # =========================
 @app.route("/")
 def home():
+    last_update = "尚未執行"
+    if os.path.exists(DEBUG_FILE):
+        with open(DEBUG_FILE, "r") as f:
+            last_update = json.load(f).get("updated", "未知")
+
     return f"""
     <div style="font-family:sans-serif; padding:20px; max-width:600px; margin:auto;">
-        <h1 style="color:#5865F2;">🦅 AI Manager 診斷後台</h1>
-        <p><b>伺服器時間:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <h1>🦅 AI Manager 診斷後台</h1>
+        <p>最後更新時間: <b>{last_update}</b></p>
         <hr>
-        <div style="background:#eef; padding:15px; border-radius:10px; border:1px solid #ccd;">
-            <h3>🔍 數據量測工具</h3>
-            <p>點擊下方連結，將「只在網頁顯示數據」，不觸發 Discord，用於檢查字數：</p>
-            <a href="/debug/all" style="display:inline-block; background:#5865F2; color:white; padding:10px 20px; text-decoration:none; border-radius:5px;">📊 檢視所有 AI 數據量</a>
+        <div style="background:#f9f9f9; padding:15px; border-radius:10px; border:1px solid #ddd;">
+            <h3>第一步：觸發計算</h3>
+            <p>點擊後會立即返回，程式會在背景跑（約需 1-2 分鐘）。</p>
+            <a href="/trigger_debug" style="display:inline-block; background:#5865F2; color:white; padding:10px; text-decoration:none; border-radius:5px;">🚀 開始背景計算</a>
         </div>
         <br>
-        <p>👉 <a href="/run/all">🚀 正式執行 (發送 Discord)</a></p>
+        <div style="background:#eef; padding:15px; border-radius:10px; border:1px solid #ccd;">
+            <h3>第二步：檢視結果</h3>
+            <p>若背景跑完，點擊此處可看內容與字數。</p>
+            <a href="/view_debug" style="display:inline-block; background:#2ecc71; color:white; padding:10px; text-decoration:none; border-radius:5px;">📊 查看最新數據量</a>
+        </div>
     </div>
     """
 
-@app.route("/debug/all")
-def debug_all():
-    # 執行所有模組
-    reports = [
-        safe_run(run_taiwan_stock, "台股存股"),
-        safe_run(run_grid, "台股網格"),
-        safe_run(run_us_ai, "美股盤後")
-    ]
+@app.route("/trigger_debug")
+def trigger():
+    threading.Thread(target=background_task).start()
+    return "<h3>🚀 已啟動背景計算</h3><p>請等待約 1-2 分鐘後，回到首頁點擊「查看最新數據量」。</p><a href='/'>返回首頁</a>"
+
+@app.route("/view_debug")
+def view():
+    if not os.path.exists(DEBUG_FILE):
+        return "<h3>❌ 尚未有數據</h3><p>請先點擊觸發計算並稍等。</p><a href='/'>返回</a>"
     
-    total_len = sum(r['length'] for r in reports)
+    with open(DEBUG_FILE, "r", encoding="utf-8") as f:
+        report = json.load(f)
     
-    # 建立偵錯網頁
-    html = f"""
-    <body style="font-family:monospace; background:#1e1e1e; color:#d4d4d4; padding:20px;">
-        <h1 style="color:#4ec9b0;">📊 AI 數據量分析報告</h1>
-        <p>總計字數: <span style="color:#ce9178; font-size:1.5em;">{total_len}</span> / 2000 (Discord 單則上限)</p>
-        <a href="/" style="color:#569cd6;">⬅ 返回首頁</a>
-        <hr style="border-color:#333;">
-    """
+    html = f"<body style='background:#1e1e1e; color:#ccc; padding:20px; font-family:monospace;'>"
+    html += f"<h1>📊 數據診斷 (更新於: {report['updated']})</h1><a href='/'>⬅ 返回</a><hr>"
     
-    for r in reports:
-        color = "#9cdcfe" if r['length'] < 1000 else "#d16969"
+    total_len = sum(d['len'] for d in report['data'])
+    html += f"<h3>總計字數: <span style='color:orange;'>{total_len}</span> / 2000</h3>"
+
+    for d in report['data']:
         html += f"""
-        <div style="margin-bottom:30px; border:1px solid #333; padding:15px;">
-            <h2 style="color:#dcdcaa;">📍 {r['name']}</h2>
-            <p>耗時: {r['time']}s | 字數: <span style="color:{color};">{r['length']}</span></p>
-            <pre style="background:#000; padding:10px; border-radius:5px; overflow-x:auto; white-space:pre-wrap;">{r['content']}</pre>
+        <div style="border:1px solid #444; padding:10px; margin:20px 0;">
+            <h3 style="color:#569cd6;">📍 {d['name']} ({d['time']})</h3>
+            <p>字數: {d['len']}</p>
+            <pre style="background:#000; padding:10px; white-space:pre-wrap;">{d['content']}</pre>
         </div>
         """
-    
-    html += "</body>"
-    return html
-
-# =========================
-# 正式執行路由保留
-# =========================
-@app.route("/run/all")
-def run_all():
-    # ... 這裡保持你原本的 Discord 發送邏輯 ...
-    return "已觸發正式推播"
+    return html + "</body>"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
