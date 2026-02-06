@@ -3,108 +3,144 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import io
-import json
-import os
 from datetime import datetime, timezone, timedelta
 import logging
 
-# --- 強制修復：防止伺服器環境卡死並支援無 GUI 環境 ---
+# 強制 Agg 後端，確保在 Render 等伺服器環境運行穩定
 import matplotlib
 matplotlib.use('Agg')
 
-# ================= 設定 =================
-LEDGER_FILE = "/tmp/ledger.json"
-GRID_LEVELS = 5
-GRID_GAP_PCT = 0.03
-
+# ================= 實驗參數 =================
+TEST_CAPITAL = 10000  # 一萬元實驗資金
 TARGETS = {
-    "00929.TW": {"cap": 3333, "name": "00929 (High Div)"},
-    "2317.TW": {"cap": 3334, "name": "2317 (Hon Hai)"},
-    "00878.TW": {"cap": 3333, "name": "00878 (Sustainable)"}
+    "00929.TW": {"name": "00929 科技優息", "weight": 0.33},
+    "2317.TW": {"name": "2317 鴻海", "weight": 0.34},
+    "00878.TW": {"name": "00878 永續高股息", "weight": 0.33}
 }
 
-# ================= 工具與繪圖 =================
-def load_ledger():
-    if os.path.exists(LEDGER_FILE):
-        try:
-            with open(LEDGER_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except: return {}
-    return {}
+def compute_advanced_grid(df):
+    """強化版：六維度趨勢矩陣與高精準指標計算"""
+    close = df['Close']
+    price = float(close.iloc[-1])
+    
+    # 1. 均線與布林通道
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    std = close.rolling(20).std()
+    upper = ma20 + (std * 2)
+    lower = ma20 - (std * 2)
+    
+    last_ma20 = ma20.iloc[-1]
+    last_ma60 = ma60.iloc[-1]
+    last_lower = lower.iloc[-1]
+    last_upper = upper.iloc[-1]
+    
+    # 2. RSI (強弱指標)
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rsi = 100 - (100 / (1 + (gain / loss.replace(0, 0.001)))).iloc[-1]
+    
+    # 3. 六維度趨勢引擎
+    if price > last_ma20 > last_ma60 and price > (last_ma20 * 1.02):
+        trend = "🟢 強勢多頭 (利潤奔跑)"
+    elif last_ma20 > price > last_ma60:
+        trend = "🍀 多頭回檔 (分批佈局點)"
+    elif price < last_ma20 < last_ma60 and price < last_lower:
+        trend = "🔥 極度超跌 (左側機會)"
+    elif price < last_ma20 < last_ma60:
+        trend = "🔴 強勢空頭 (觀望避險)"
+    elif price > last_ma60 and price < last_ma20:
+        trend = "🟡 弱勢整理 (網格震盪)"
+    else:
+        trend = "🟠 空頭反彈 (謹慎試單)"
+    
+    # 4. ATR 動態網格間距 (計算最近 14 天波動)
+    tr = pd.concat([
+        (df['High'] - df['Low']), 
+        (df['High'] - df['Close'].shift()).abs(), 
+        (df['Low'] - df['Close'].shift()).abs()
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().iloc[-1]
+    
+    # 動態補倉建議：若處於超跌或回檔區，補倉位設在布林下軌附近或現價減去 0.8 倍 ATR
+    grid_buy = min(price - (atr * 0.8), last_lower)
 
-def generate_grid_plot(dfs_dict):
-    """
-    繪製多標的對比趨勢圖
-    """
-    plt.figure(figsize=(12, 6))
-    for symbol, df in dfs_dict.items():
-        if df.empty: continue
+    return {
+        "price": price,
+        "rsi": rsi,
+        "trend": trend,
+        "bb_lower": last_lower,
+        "bb_upper": last_upper,
+        "atr": atr,
+        "grid_buy": grid_buy
+    }
+
+def generate_grid_chart(dfs):
+    """繪製網格動態分析圖：包含價格、布林通道與成交量指標"""
+    plt.figure(figsize=(12, 10))
+    
+    for i, (symbol, df) in enumerate(dfs.items()):
+        ax = plt.subplot(3, 1, i+1)
         name = TARGETS[symbol]['name']
-        # 標準化價格 (以第一天為 100) 以便觀察相對動能
-        norm_price = df['Close'] / df['Close'].iloc[0] * 100
-        plt.plot(df.index, norm_price, label=f"{name}", lw=2)
-    
-    plt.title("Portfolio Relative Performance (Base 100)", fontsize=14)
-    plt.ylabel("Relative Growth (%)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
+        
+        plot_df = df.tail(40)
+        ma20 = plot_df['Close'].rolling(20).mean()
+        std20 = plot_df['Close'].rolling(20).std()
+        
+        # 繪製主線
+        ax.plot(plot_df.index, plot_df['Close'], label='Price', lw=2, color='#1f77b4')
+        ax.fill_between(plot_df.index, ma20-2*std20, ma20+2*std20, color='gray', alpha=0.15, label='BB Band')
+        ax.plot(plot_df.index, ma20, color='orange', linestyle='--', alpha=0.7, label='MA20')
+        
+        ax.set_title(f"{name} Analysis (6-Wave Trend)", fontsize=11, fontweight='bold')
+        ax.legend(loc='upper left', fontsize=8)
+        ax.grid(True, alpha=0.2, linestyle=':')
+
+    plt.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=120)
     buf.seek(0)
     plt.close()
     return buf
 
-# ================= 主程式 =================
 def run_grid():
-    ledger = load_ledger()
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     
     report = [
-        f"# 🦅 AI 存股網格報告 ({now:%Y-%m-%d})", 
-        "-"*30
+        f"# 🦅 AI 萬元網格實驗報告 [{now:%Y-%m-%d}]",
+        f"**實驗資金總額:** `{TEST_CAPITAL:,} TWD`",
+        "=========================="
     ]
     
-    dfs_for_plot = {}
-
+    dfs_all = {}
     for symbol, cfg in TARGETS.items():
         try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period="6mo", timeout=15)
-            
+            # 增加抓取長度以確保 MA60 計算準確
+            df = yf.download(symbol, period="8mo", interval="1d", progress=False)
             if df.empty: continue
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
             
-            # 處理 MultiIndex 索引
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-                
-            dfs_for_plot[symbol] = df
-            price = float(df['Close'].iloc[-1])
+            data = compute_advanced_grid(df)
+            dfs_all[symbol] = df
             
-            # 趨勢分析
-            ma20 = df['Close'].rolling(20).mean().iloc[-1]
-            ma60 = df['Close'].rolling(60).mean().iloc[-1]
-            trend_icon = "🟢 多頭" if price > ma20 > ma60 else "🔴 空頭" if price < ma20 < ma60 else "🟡 盤整"
-
-            report.append(
-                f"### 📍 {cfg['name']}\n"
-                f"💰 現價: `{price:.2f}` | 📈 趨勢: {trend_icon}\n"
-                f"📒 **網格水位**: `{price*(1-GRID_GAP_PCT):.2f}` (預計補倉點)"
-            )
-
+            # 計算一萬元分配到該標的的預計每格買入金額
+            alloc_total = TEST_CAPITAL * cfg['weight']
+            per_grid = alloc_total / 5 # 假設分五層網格
+            
+            report.append(f"### 📍 {cfg['name']}")
+            report.append(f"💰 現價: `{data['price']:.2f}` | **趨勢: {data['trend']}**")
+            report.append(f"📊 RSI: `{data['rsi']:.1f}` | ATR(14): `{data['atr']:.2f}`")
+            report.append(f"🛡️ 布林區間: `{data['bb_lower']:.2f}` - `{data['bb_upper']:.2f}`")
+            report.append(f"📥 **動態補倉建議**: `{data['grid_buy']:.2f}` (預計投入: {per_grid:.0f}元)")
+            report.append("-" * 25)
+            
         except Exception as e:
-            report.append(f"❌ {symbol} 異常: `{str(e)[:20]}`")
+            report.append(f"❌ {symbol} 分析失敗: {str(e)[:50]}")
 
-    # 產出圖表
-    img_buf = None
-    if dfs_for_plot:
-        try:
-            img_buf = generate_grid_plot(dfs_for_plot)
-        except Exception as e:
-            logging.error(f"繪圖失敗: {e}")
-
-    report.append("-" * 30)
-    report.append("💡 *註：網格數據每 24 小時校準一次。*")
+    report.append(f"🤖 **經理人決策**: 六維度矩陣已完成掃描。")
+    report.append(f"\n(台灣時間 {now:%H:%M} 即時分析)")
     
+    img_buf = generate_grid_chart(dfs_all)
     return "\n".join(report), img_buf
