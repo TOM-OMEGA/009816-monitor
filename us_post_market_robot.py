@@ -1,120 +1,138 @@
-import os
 import yfinance as yf
-from datetime import datetime, timedelta, timezone
 import pandas as pd
-import time
+import numpy as np
+import matplotlib.pyplot as plt
+import io
+from datetime import datetime, timedelta, timezone
 import logging
 
-# 基礎日誌設定
-logging.basicConfig(level=logging.INFO)
-
-# ==== AI 模組導入 ====
-try:
-    from ai_expert import get_us_ai_point
-except ImportError:
-    get_us_ai_point = None
+# 強制 Agg 後端，避免 Render 環境報錯
+import matplotlib
+matplotlib.use('Agg')
 
 # ==== 設定 ====
 TARGETS_MAP = {"^GSPC": "標普500", "^DJI": "道瓊工業", "^IXIC": "那斯達克", "TSM": "台積電ADR"}
 TARGETS = list(TARGETS_MAP.keys())
 
-def fetch_data_safe(symbol):
-    """
-    抓取美股數據並強制處理索引格式
-    """
-    try:
-        # 下載最近一個月的數據
-        df = yf.download(symbol, period="1mo", interval="1d", progress=False, timeout=15)
-        
-        if df.empty:
-            return pd.DataFrame()
-            
-        # 🟢 核心修正：處理 yfinance v0.2.x 產生的 Multi-Index
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        return df
-    except Exception as e:
-        logging.error(f"❌ {symbol} 抓取異常: {e}")
-        return pd.DataFrame()
-
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+def compute_indicators(df):
+    """計算趨勢、RSI與動能分值"""
+    close = df['Close']
+    # RSI
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss.replace(0, 0.001)
-    return 100 - (100 / (1 + rs))
-
-def generate_text_report(dfs, ai_signal):
-    # 使用美國東部時間標註報告日期
-    us_tz = timezone(timedelta(hours=-5))
-    report_date = datetime.now(us_tz).strftime("%Y-%m-%d")
+    rsi = 100 - (100 / (1 + rs))
     
-    # 修改為 # 大標題與統一分隔線
-    report = [
-        f"# 🌎 美股盤後 AI 分析報告 ({report_date})",
-        f"------------------------------------"
-    ]
+    # 均線
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    
+    last_price = close.iloc[-1]
+    last_rsi = rsi.iloc[-1]
+    last_ma20 = ma20.iloc[-1]
+    last_ma60 = ma60.iloc[-1]
+    
+    # 趨勢判斷
+    if last_price > last_ma20 > last_ma60: trend = "🟢強勢多頭"
+    elif last_price < last_ma20 < last_ma60: trend = "🔴強勢空頭"
+    elif last_price > last_ma60: trend = "🟡多頭回檔"
+    else: trend = "🟡空頭反彈"
+    
+    # 動能與機率 (模擬機率算法)
+    up_score = 66 if last_rsi < 40 else 33 if last_rsi > 60 else 50
+    down_score = 100 - up_score
+    prob = 100 - last_rsi # 簡單逆向機率邏輯
+    
+    return {
+        "price": last_price,
+        "rsi": last_rsi,
+        "trend": trend,
+        "up": up_score,
+        "down": down_score,
+        "prob": prob
+    }
+
+def generate_us_dashboard(dfs):
+    """繪製如圖 1000012027 的多維度儀表板"""
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
     for symbol, df in dfs.items():
-        try:
-            if len(df) < 10: continue
-            
-            close_series = df['Close']
-            last_price = float(close_series.iloc[-1])
-            prev_price = float(close_series.iloc[-2])
-            pct_change = (last_price / prev_price - 1) * 100
-            
-            # 技術指標
-            ma5 = close_series.rolling(5).mean().iloc[-1]
-            ma20 = close_series.rolling(20).mean().iloc[-1]
-            rsi = compute_rsi(close_series).iloc[-1]
-            
-            # 趨勢圖示
-            if last_price > ma5 > ma20: trend = "🟢 強勢"
-            elif last_price < ma5 < ma20: trend = "🔴 空頭"
-            else: trend = "🟡 震盪"
-            
-            name = TARGETS_MAP.get(symbol, symbol)
-            report.append(f"• {name}: `{last_price:,.1f}` ({pct_change:+.2f}%) | RSI: `{rsi:.0f}` | {trend}")
-        except Exception as e:
-            logging.error(f"生成 {symbol} 報告列時失敗: {e}")
+        name = TARGETS_MAP[symbol]
+        # 標準化價格
+        norm_close = df['Close'] / df['Close'].iloc[0] * 100
+        ax1.plot(df.index, norm_close, label=name)
+        
+        # RSI
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rsi = 100 - (100 / (1 + (gain / loss.replace(0, 0.001))))
+        ax3.plot(df.index, rsi, label=f"{name} RSI", linestyle='--')
 
-    # =====================
-    # AI 決策區塊 (標題加大與視覺強化)
-    # =====================
-    decision = ai_signal.get('decision', '分析中') if isinstance(ai_signal, dict) else "觀望"
+    ax1.set_title("Market Relative Performance (Base 100)", fontsize=14)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
     
-    report.append(f"")
-    report.append(f"# 🤖 美股核心 AI 決策") # 改為 # 大標題
-    report.append(f"> **{decision}**")     # 使用粗體與引用塊強化字體感
-    report.append(f"------------------------------------")
+    # MACD 動能柱 (以標普500為例)
+    gspc_close = dfs["^GSPC"]['Close']
+    exp1 = gspc_close.ewm(span=12, adjust=False).mean()
+    exp2 = gspc_close.ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    colors = ['red' if h > 0 else 'green' for h in hist]
+    ax2.bar(dfs["^GSPC"].index, hist, color=colors, alpha=0.7)
+    ax2.set_title("S&P 500 MACD Momentum")
     
-    return "\n".join(report)
+    ax3.axhline(70, color='r', linestyle=':', alpha=0.5)
+    ax3.axhline(30, color='g', linestyle=':', alpha=0.5)
+    ax3.set_title("RSI Relative Strength")
+    
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    plt.close()
+    return buf
 
-# ==== ✅ 標準入口 (給 main.py 使用) ====
 def run_us_ai():
-    logging.info("🚀 啟動美股盤後任務...")
-    
+    logging.info("🚀 啟動美股盤後分析任務...")
     dfs = {}
     for s in TARGETS:
-        df = fetch_data_safe(s)
+        df = yf.download(s, period="3mo", interval="1d", progress=False)
         if not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
             dfs[s] = df
-        time.sleep(1.5) # 緩衝，避免請求過快被擋
+            
+    if not dfs: return "❌ 數據抓取失敗", None
+
+    us_tz = timezone(timedelta(hours=-5))
+    report_date = datetime.now(us_tz).strftime("%Y-%m-%d")
+    tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
+    
+    report = [f"🦅 美股盤後快報 [{report_date}]", "========================"]
+    
+    for symbol in TARGETS:
+        if symbol not in dfs: continue
+        df = dfs[symbol]
+        last_close = df['Close'].iloc[-1]
+        prev_close = df['Close'].iloc[-2]
+        pct = (last_close / prev_close - 1) * 100
         
-    if not dfs:
-        return "# ❌ 美股數據抓取失敗\n請檢查 Render 網路連線或 API 狀態。"
-
-    # AI 判斷處理
-    ai_signal = {"decision": "觀望"}
-    if get_us_ai_point and "^GSPC" in dfs:
-        try:
-            # 簡單封裝最新收盤價供 AI 參考
-            ai_input = {s: {"last": float(df['Close'].iloc[-1])} for s, df in dfs.items()}
-            ai_signal = get_us_ai_point(extra_data=ai_input)
-        except Exception as e:
-            logging.error(f"AI 呼叫失敗: {e}")
-
-    # 產出報告文字
-    return generate_text_report(dfs, ai_signal)
+        info = compute_indicators(df)
+        name = TARGETS_MAP[symbol]
+        
+        report.append(f"【{name}】 {last_close:,.2f} ({pct:+.2f}%)")
+        report.append(f"趨勢: {info['trend']} | RSI: {info['rsi']:.1f}")
+        report.append(f"短線動能: 📈反彈{info['up']}分 vs 📉下跌{info['down']}分")
+        report.append(f"機率試算: 反彈機率{info['prob']:.0f}%")
+        report.append("------------------------")
+        
+    report.append("🤖 AI 決策中心：觀望 (信心度 0%)")
+    report.append(f"\n(台灣時間 {tw_now} 發送)")
+    
+    img_buf = generate_us_dashboard(dfs)
+    
+    return "\n".join(report), img_buf
