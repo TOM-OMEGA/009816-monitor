@@ -28,11 +28,16 @@ def is_market_open():
 
 # === 中央巡檢線程 ===
 def master_monitor_loop():
-    """中央監控線程：存股 + 網格 AI 判斷"""
-    print("🤖 中央監控系統：巡檢線程進入準備狀態...")
+    print("🤖 中央監控系統：巡檢線程啟動...")
+    time.sleep(3) 
     
-    # 💡 關鍵 1：啟動後僅等待 5 秒，確保 Flask 先起跳
-    time.sleep(5) 
+    # 💡 測試點：在 while 之前先強制跑一次，不管是不是開盤時間
+    print("🧪 啟動初期強制測試巡檢...")
+    try:
+        run_009816_monitor()
+        print("✅ 初始測試完成")
+    except Exception as e:
+        print(f"❌ 初始測試失敗: {e}")
 
     while True:
         try:
