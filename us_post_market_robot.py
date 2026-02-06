@@ -2,19 +2,18 @@
 import os
 import requests
 import yfinance as yf
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import matplotlib.font_manager as fm
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 
-# ==== 強制設定：防止伺服器環境卡死與字體緩存問題 ====
+# ==== 強制設定：防止伺服器環境卡死 ====
+# 1. 先設定後端為 Agg (無介面模式)
 import matplotlib
 matplotlib.use('Agg') 
+# 2. 禁用字體管理員的囉唆日誌
 import logging
 logging.getLogger('matplotlib.font_manager').disabled = True
-# ===============================================
+# ===================================
 
 # ==== AI 模組 (確保 ai_expert.py 存在) ====
 try:
@@ -25,6 +24,11 @@ except ImportError:
 
 # ==== 中文字體設定 (優化：延遲載入並明確指定路徑) ====
 def setup_chinese_font():
+    # 💡 關鍵修改：將重量級引用移入函式內 (Lazy Import)
+    # 避免在 main.py 啟動時就佔用大量記憶體
+    import matplotlib.font_manager as fm
+    import matplotlib.pyplot as plt
+
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     os.makedirs(static_dir, exist_ok=True)
     font_path = os.path.join(static_dir, "NotoSansTC-Regular.otf")
@@ -45,7 +49,6 @@ def setup_chinese_font():
 
     # 2. 註冊字體
     try:
-        # 使用字體路徑建立屬性物件，這在 Linux/Render 最保險
         fe = fm.FontEntry(fname=font_path, name='NotoSansTC')
         fm.fontManager.ttflist.append(fe)
         plt.rcParams['font.family'] = fe.name
@@ -85,10 +88,19 @@ def compute_bollinger(series, window=20, std_dev=2):
     return ma + std*std_dev, ma, ma - std*std_dev
 
 def fetch_data(symbol, period="30d"):
-    return yf.Ticker(symbol).history(period=period, auto_adjust=True)
+    # 增加 timeout 防止 yfinance 卡死
+    try:
+        return yf.Ticker(symbol).history(period=period, auto_adjust=True, timeout=10)
+    except Exception as e:
+        print(f"⚠️ 無法抓取 {symbol}: {e}")
+        return pd.DataFrame()
 
 # ==== 圖表生成 (修正：傳入 font_prop 解決亂碼) ====
 def plot_chart(dfs):
+    # 💡 關鍵修改：將繪圖引用移入函式內
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    
     # 取得字體屬性
     font_prop = setup_chinese_font()
     
@@ -170,24 +182,33 @@ def generate_report(dfs, ai_signal):
 
 # ==== LINE 推播 (優化渲染 URL) ====
 def push_line(report, plot_path=None):
-    if not LINE_TOKEN or not USER_ID: return
+    if not LINE_TOKEN or not USER_ID: 
+        print("⚠️ 無法推播：LINE_TOKEN 或 USER_ID 未設定")
+        return
+
     headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
     
     # 傳送文字
-    requests.post("https://api.line.me/v2/bot/message/push", 
-                  headers=headers, 
-                  json={"to": USER_ID, "messages":[{"type":"text","text":report}]}, 
-                  timeout=15)
+    try:
+        requests.post("https://api.line.me/v2/bot/message/push", 
+                      headers=headers, 
+                      json={"to": USER_ID, "messages":[{"type":"text","text":report}]}, 
+                      timeout=15)
+    except Exception as e:
+        print(f"❌ LINE 文字推播失敗: {e}")
 
     # 傳送圖片 (Render 專用)
     if plot_path and os.path.exists(plot_path):
         base_url = os.environ.get("RENDER_EXTERNAL_URL")
         if base_url:
             plot_url = f"{base_url}/static/plot.png?t={int(datetime.now().timestamp())}"
-            requests.post("https://api.line.me/v2/bot/message/push", 
-                          headers=headers, 
-                          json={"to": USER_ID, "messages":[{"type":"image","originalContentUrl":plot_url,"previewImageUrl":plot_url}]}, 
-                          timeout=15)
+            try:
+                requests.post("https://api.line.me/v2/bot/message/push", 
+                              headers=headers, 
+                              json={"to": USER_ID, "messages":[{"type":"image","originalContentUrl":plot_url,"previewImageUrl":plot_url}]}, 
+                              timeout=15)
+            except Exception as e:
+                print(f"❌ LINE 圖片推播失敗: {e}")
 
 # ==== 主任務 ====
 def run_us_post_market():
@@ -197,7 +218,9 @@ def run_us_post_market():
     
     dfs = {s: fetch_data(s) for s in TARGETS}
     dfs = {s: df for s, df in dfs.items() if not df.empty}
-    if not dfs: return
+    if not dfs: 
+        print("⚠️ 無法取得美股數據，任務結束")
+        return
 
     ai_signal = {"decision": "觀望", "confidence": 0}
     if get_us_ai_point:
