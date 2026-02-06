@@ -64,7 +64,7 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
     persona_logic = (
         f"身分：作者劉承彥。標的：{target_name}。{focus}\n"
         "請嚴守十條實戰鐵律：1.期望值 2.非加碼 3.趨勢濾網 4.動態間距 5.資金控制 "
-        "6.除息還原 7.低成本 8.情緒收割 9.連動風險 10.自動化。"
+        "6.除息還原 7.低成本 8.情緒收割 9.連動風險 10.自動化 11.圖表。"
     )
 
     prompt = f"""
@@ -78,7 +78,7 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
 {{
   "decision": "可行 | 不可行 | 觀望",
   "confidence": 0-100,
-  "reason": "60字內理由"
+  "reason": "80字內理由"
 }}
 """
 
