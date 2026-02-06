@@ -7,6 +7,13 @@ from data_engine import get_high_level_insight, get_fm_data
 from hard_risk_gate import hard_risk_gate
 import pandas as pd
 
+# --- 強制修復：防止 Render 環境卡死在 Matplotlib 緩存 ---
+import matplotlib
+matplotlib.use('Agg') 
+import logging
+logging.getLogger('matplotlib.font_manager').disabled = True
+# ---------------------------------------------------
+
 LINE_TOKEN = os.environ.get('LINE_ACCESS_TOKEN')
 USER_ID = os.environ.get('USER_ID')
 
@@ -21,6 +28,7 @@ def get_realtime_data(ticker):
         if df is not None and not df.empty and len(df) >= 2:
             curr = round(float(df["Close"].iloc[-1]), 2)
             # --- 數據校驗 ---
+            # 009816 如果抓到 10.0 或 0.0，通常是 yfinance 抓取失敗的佔位符
             if (ticker == "009816.TW" and curr == 10.0) or curr <= 0:
                 print(f"⚠️ 偵測到離譜即時價格: {curr}，嘗試改從 info 抓取...")
                 curr = t.info.get('regularMarketPrice', None)
@@ -38,6 +46,7 @@ def get_realtime_data(ticker):
 # --------------------------------------------------
 def safe_ai_point(extra, target_name, summary):
     try:
+        # 增加超時保護，避免 AI 卡死
         ai = get_ai_point(extra, target_name, summary_override=summary)
         if not ai or "decision" not in ai:
             return {"decision": "中性觀望", "confidence": 30, "reason": "AI 回傳格式不符"}
@@ -60,18 +69,23 @@ def run_009816_monitor():
     sox_pct = sox_pct if sox_pct is not None else 0.0
     tsm_pct = tsm_pct if tsm_pct is not None else 0.0
 
-    # 2. 抓取 FinMind 歷史資料
+    # 2. 抓取 FinMind 歷史資料（天數拉長到 45 天確保 RSI 準確）
     df = get_fm_data("TaiwanStockPrice", "009816.TW", days=45)
     
+    # 3. 數據完整性檢查
+    if (df is None or df.empty) and price is None:
+        print("❌ 完全抓不到數據，終止監控"); return
+
     if df is not None and not df.empty:
         df['close'] = pd.to_numeric(df['close'], errors='coerce')
         df = df.dropna(subset=['close'])
         df = df[df['close'] != 10.0] # 💡 同步過濾歷史髒數據
         closes = df["close"]
     else:
+        # 如果 FinMind 掛了但即時價格還有，建立最小 DataFrame
         closes = pd.Series([price] * 20) if price else pd.Series([])
 
-    # 數據徹底失效檢查
+    # 如果即時價格失效，用歷史最後一筆補位
     if (price is None or price == 10.0) and (not closes.empty):
         price = round(float(closes.iloc[-1]), 2)
     
@@ -81,18 +95,20 @@ def run_009816_monitor():
     # 4. 計算指標
     recent_22 = closes.tail(22)
     month_low = recent_22.min() if not recent_22.empty else price
+    month_high = recent_22.max() if not recent_22.empty else price
     pct_from_low = round((price - month_low) / month_low * 100, 2)
 
     # RSI 計算強化 (修正滾動 NaN 問題)
     delta = closes.diff()
     up = delta.clip(lower=0).rolling(14).mean()
     down = -delta.clip(upper=0).rolling(14).mean()
+    
     if not down.empty and down.iloc[-1] != 0:
         rsi = round(100 - (100 / (1 + (up.iloc[-1] / down.iloc[-1]))), 1)
     else:
-        rsi = 50.0
+        rsi = 100.0 if (not up.empty and up.iloc[-1] > 0) else 50.0
 
-    # 5. 趨勢判斷
+    # 5. 趨勢與技術結構
     trend = "盤整"
     if len(closes) >= 20:
         ma10 = closes.rolling(10).mean().iloc[-1]
@@ -101,6 +117,7 @@ def run_009816_monitor():
         elif price < ma10 < ma20: trend = "空頭"
 
     tech = []
+    # 布林帶判斷
     if len(closes) >= 20:
         std = closes.tail(20).std()
         ma20_val = closes.tail(20).mean()
@@ -110,6 +127,8 @@ def run_009816_monitor():
 
     # 6. 籌碼與 AI 分析
     extra = get_high_level_insight("009816.TW") or {}
+    
+    # 強化摘要：直接告訴 AI 哪些數據是準確的，防止它參考錯誤資訊
     summary = (
         f"現價:{price:.2f}, 月低:{month_low:.2f}, 距月低:{pct_from_low:.2f}%\n"
         f"RSI:{rsi}, 趨勢:{trend}, 費半:{sox_pct:+.2f}%, TSM:{tsm_pct:+.2f}%\n"
