@@ -50,7 +50,11 @@ def generate_text_report(dfs, ai_signal):
     us_tz = timezone(timedelta(hours=-5))
     report_date = datetime.now(us_tz).strftime("%Y-%m-%d")
     
-    report = [f"🌎 **美股盤後分析快報 [{report_date}]**"]
+    # 修改為 # 大標題與統一分隔線
+    report = [
+        f"# 🌎 美股盤後 AI 分析報告 ({report_date})",
+        f"------------------------------------"
+    ]
     
     for symbol, df in dfs.items():
         try:
@@ -76,9 +80,15 @@ def generate_text_report(dfs, ai_signal):
         except Exception as e:
             logging.error(f"生成 {symbol} 報告列時失敗: {e}")
 
-    # 加入 AI 建議
+    # =====================
+    # AI 決策區塊 (標題加大與視覺強化)
+    # =====================
     decision = ai_signal.get('decision', '分析中') if isinstance(ai_signal, dict) else "觀望"
-    report.append(f"\n🤖 **AI 核心決策**: {decision}")
+    
+    report.append(f"")
+    report.append(f"# 🤖 美股核心 AI 決策") # 改為 # 大標題
+    report.append(f"> **{decision}**")     # 使用粗體與引用塊強化字體感
+    report.append(f"------------------------------------")
     
     return "\n".join(report)
 
@@ -94,7 +104,7 @@ def run_us_ai():
         time.sleep(1.5) # 緩衝，避免請求過快被擋
         
     if not dfs:
-        return "❌ 美股數據抓取失敗，請檢查 Render 網路連線。"
+        return "# ❌ 美股數據抓取失敗\n請檢查 Render 網路連線或 API 狀態。"
 
     # AI 判斷處理
     ai_signal = {"decision": "觀望"}
