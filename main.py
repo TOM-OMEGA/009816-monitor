@@ -4,6 +4,7 @@ import logging
 import requests
 from flask import Flask
 from datetime import datetime
+import json
 
 # =========================
 # 導入你的 AI 模組（一次載入，避免 Render 卡死）
@@ -24,18 +25,19 @@ app = Flask(__name__)
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip() or None
 
 def send_discord(msg: str):
+    """安全發送 Discord，訊息過長自動截斷"""
     if not WEBHOOK:
         logging.error("❌ DISCORD_WEBHOOK_URL 未設定")
         return False
 
+    # Discord 單訊息上限 2000 字，分段處理
+    max_len = 1900
     try:
-        r = requests.post(
-            WEBHOOK,
-            json={"content": msg},
-            timeout=10
-        )
-        logging.info(f"Discord status {r.status_code}")
-        return r.status_code in (200, 204)
+        for i in range(0, len(msg), max_len):
+            part = msg[i:i+max_len]
+            r = requests.post(WEBHOOK, json={"content": part}, timeout=15)
+            logging.info(f"Discord status {r.status_code}")
+        return True
     except Exception:
         logging.exception("Discord 發送失敗")
         return False
@@ -57,12 +59,25 @@ def home():
     """
 
 # =========================
+# 執行任務安全包裝
+# =========================
+def safe_run(func, name):
+    try:
+        result = func()
+        if isinstance(result, dict):
+            result = json.dumps(result, ensure_ascii=False)
+        return result
+    except Exception as e:
+        logging.exception(f"{name} 執行失敗")
+        return f"❌ {name} 執行失敗: {str(e)}"
+
+# =========================
 # 台股存股
 # =========================
 @app.route("/run/tw")
 def run_tw():
     send_discord("📊【台股存股 AI】開始分析")
-    result = run_taiwan_stock()
+    result = safe_run(run_taiwan_stock, "台股存股 AI")
     send_discord(f"📊【台股存股 AI】結果\n{result}")
     return "OK"
 
@@ -72,7 +87,7 @@ def run_tw():
 @app.route("/run/grid")
 def run_grid_route():
     send_discord("🧱【台股網格 AI】開始分析")
-    result = run_grid()
+    result = safe_run(run_grid, "台股網格 AI")
     send_discord(f"🧱【台股網格 AI】結果\n{result}")
     return "OK"
 
@@ -82,7 +97,7 @@ def run_grid_route():
 @app.route("/run/us")
 def run_us():
     send_discord("🌎【美股盤後 AI】開始分析")
-    result = run_us_ai()
+    result = safe_run(run_us_ai, "美股盤後 AI")
     send_discord(f"🌎【美股盤後 AI】結果\n{result}")
     return "OK"
 
@@ -93,9 +108,9 @@ def run_us():
 def run_all():
     send_discord("🚀【AI 任務】全部執行")
 
-    r1 = run_taiwan_stock()
-    r2 = run_grid()
-    r3 = run_us_ai()
+    r1 = safe_run(run_taiwan_stock, "台股存股 AI")
+    r2 = safe_run(run_grid, "台股網格 AI")
+    r3 = safe_run(run_us_ai, "美股盤後 AI")
 
     send_discord(
         "✅【AI 任務完成】\n"
