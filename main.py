@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
     from monitor_009816 import run_009816_monitor
     from new_ten_thousand_grid import run_unified_experiment
-    from us_post_market_robot import schedule_job
+    from us_post_market_robot import run_us_post_market, schedule_job
 except ImportError as e:
     print(f"❌ 導入失敗：{e}")
 
@@ -22,69 +22,62 @@ def get_now_tw():
 
 def is_market_open():
     now_tw = get_now_tw()
-    # 週末不跑
     if now_tw.weekday() >= 5: return False
-    # 台股交易時間 09:00 - 13:35 (多給一點 buffer)
-    return 9 <= now_tw.hour < 14
+    # 稍微放寬到 14 點，確保收盤數據也能抓到
+    return 9 <= now_tw.hour <= 14
 
 # === 中央巡檢線程 ===
 def master_monitor_loop():
-    """中央監控線程：確保啟動後能快速執行第一次，之後再進循環"""
-    print("🤖 中央監控系統啟動：全量巡檢模式...")
+    """中央監控線程：存股 + 網格 AI 判斷"""
+    print("🤖 中央監控系統：巡檢線程進入準備狀態...")
     
-    # 💡 關鍵 1：啟動後先睡 5 秒就好，不要睡 20 秒，讓推播快點出來
+    # 💡 關鍵 1：啟動後僅等待 5 秒，確保 Flask 先起跳
     time.sleep(5) 
 
     while True:
         try:
             now_tw = get_now_tw()
             if is_market_open():
-                print(f"--- 執行全面巡檢 {now_tw.strftime('%H:%M')} ---")
-                
-                # 💡 關鍵 2：給 009816 獨立的 try-except，避免它掛了影響後面的網格
-                try:
-                    print("🦅 執行 009816 監控...")
-                    run_009816_monitor()
-                except Exception as e:
-                    print(f"❌ 009816 監控失敗: {e}")
+                print(f"--- 🚀 開始執行全面巡檢 {now_tw.strftime('%H:%M:%S')} ---")
 
-                # 💡 關鍵 3：API 緩衝時間縮短
-                time.sleep(15) 
-
-                try:
-                    print("📊 執行萬元網格實驗...")
-                    run_unified_experiment()
-                except Exception as e:
-                    print(f"❌ 網格實驗失敗: {e}")
+                # === 1️⃣ 存股009816 AI判斷 ===
+                print("🦅 執行 009816 監控任務...")
+                run_009816_monitor()
                 
-                # 每輪巡檢完睡 5 分鐘 (300秒)，扣除上方已經睡掉的時間
-                print(f"✅ 本輪巡檢結束，下次巡檢約為 {(get_now_tw() + timedelta(seconds=285)).strftime('%H:%M')}")
-                time.sleep(285) 
+                # 💡 關鍵 2：縮短任務間隔，原本 60 秒太久了，改 10 秒
+                print("⏳ 等待 10 秒切換下一個任務...")
+                time.sleep(10) 
+
+                # === 2️⃣ 一萬元網格實驗 ===
+                print("📊 執行萬元網格 AI 實驗...")
+                run_unified_experiment()
+                
+                print(f"✅ 本輪巡檢完成，進入休眠。")
+                time.sleep(300) # 5 分鐘後再跑下一輪
             else:
-                # 💡 關鍵 4：非交易時段顯示倒數，並稍微縮短檢查間隔
-                print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，巡檢暫停中...")
-                time.sleep(600) # 10 分鐘檢查一次
+                print(f"💤 非交易時段 ({now_tw.strftime('%H:%M')})，每 10 分鐘檢查一次...")
+                time.sleep(600) 
+
         except Exception as e:
-            print(f"⚠️ 中央監控總循環異常: {e}")
-            time.sleep(30)
+            print(f"⚠️ 中央監控異常: {e}")
+            time.sleep(60)
 
 @app.route('/')
 def home():
     now_tw = get_now_tw()
-    return f"<h1>🦅 經理人全面監控中</h1><p>台北時間：{now_tw.strftime('%Y-%m-%d %H:%M:%S')}</p>"
+    return f"<h1>🦅 經理人監控中</h1><p>台北時間：{now_tw.strftime('%H:%M:%S')}</p>"
 
 if __name__ == "__main__":
-    # 1. 啟動美股排程 (它內部通常會有自己的 while loop 或 schedule)
-    t_us = threading.Thread(target=schedule_job, daemon=True)
-    t_us.start()
-    print("✅ 美股 05:05 排程線程已掛載")
-
-    # 2. 啟動台股巡檢 (確保它在 Flask 啟動前就已經在背景跑)
+    # 1. 啟動台股巡檢 (daemon=True 確保 Flask 關閉時它也會關閉)
     t_tw = threading.Thread(target=master_monitor_loop, daemon=True)
     t_tw.start()
     print("✅ 台股即時巡檢線程已掛載")
+
+    # 2. 啟動美股排程
+    t_us = threading.Thread(target=schedule_job, daemon=True)
+    t_us.start()
+    print("✅ 美股 05:05 排程線程已掛載")
     
-    # 3. 啟動 Flask
+    # 3. 啟動 Flask (正式環境建議 debug=False)
     port = int(os.environ.get("PORT", 10000))
-    # 關閉 debug 模式避免 Thread 被執行兩次
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=False)
