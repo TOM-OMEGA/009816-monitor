@@ -170,3 +170,14 @@ def run_unified_experiment():
                 print(f"❌ Discord 請求失敗: {e}")
 
     return "\n".join(report)
+# ================= 標準入口（給 main.py 用） =================
+def run_grid():
+    """
+    統一給主控程式呼叫的入口
+    """
+    return run_unified_experiment()
+
+
+# 允許單獨執行（本地測試用）
+if __name__ == "__main__":
+    print(run_grid())
