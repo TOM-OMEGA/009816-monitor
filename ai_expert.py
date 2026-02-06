@@ -122,13 +122,19 @@ def get_ai_point(extra_data=None, target_name="標的", summary_override=None):
     return ai_result
 
 # === 新增美股盤後 AI 判斷 (優化 Prompt 邏輯) ===
-def get_us_ai_point(extra_data=None, target_name="US_MARKET"):
+def get_us_ai_point(extra_data):
     """
-    針對美股收盤數據優化的判斷入口
+    美股盤後專用，只判斷風險模式
     """
-    summary_override = (
-        f"【美股盤後多維度數據】\n"
-        f"各指數現況: {extra_data}\n"
-        f"請結合 MACD 動能柱(紅綠縮長)與布林通道位置判斷趨勢。"
+    summary = (
+        f"S&P500: {extra_data.get('spx')}\n"
+        f"NASDAQ: {extra_data.get('nasdaq')}\n"
+        f"SOX: {extra_data.get('sox')}\n"
+        f"TSM: {extra_data.get('tsm')}\n"
+        f"技術結構: {extra_data.get('tech')}"
     )
-    return get_ai_point(extra_data=extra_data, target_name=target_name, summary_override=summary_override)
+
+    return get_ai_point(
+        target_name="US_MARKET",
+        summary_override=summary
+    )
