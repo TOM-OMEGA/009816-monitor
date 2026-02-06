@@ -12,8 +12,8 @@ matplotlib.use('Agg')
 # -------------------------------
 
 # ================= 設定 =================
-LINE_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
-USER_ID = os.environ.get("USER_ID")
+# 💡 已改用 Discord Webhook
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 LEDGER_FILE = "ledger.json"
 
 GRID_LEVELS = 5
@@ -62,13 +62,11 @@ def build_grid(price):
 def run_unified_experiment():
     ledger = load_ledger()
     now = datetime.now(timezone(timedelta(hours=8)))
-    report = [f"🦅 AI 存股網格 {now:%Y-%m-%d %H:%M}", "-"*20]
-
-    
+    # 💡 使用 Discord 的 Markdown 語法讓標題更顯眼
+    report = [f"# 🦅 AI 存股網格報告", f"**時間:** `{now:%Y-%m-%d %H:%M}`", "-"*25]
 
     for symbol, cfg in TARGETS.items():
         try:
-            # 加入 timeout 與數據清洗
             df = yf.Ticker(symbol).history(period="6mo", timeout=15)
             if df.empty:
                 report.append(f"❌ {cfg['name']} 抓不到數據"); continue
@@ -77,7 +75,6 @@ def run_unified_experiment():
             price = float(df['Close'].iloc[-1])
             trend = trend_check(df)
 
-            # RSI 計算強化
             delta = df['Close'].diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = -delta.clip(upper=0).rolling(14).mean()
@@ -90,9 +87,8 @@ def run_unified_experiment():
             else:
                 rsi = 100 - 100/(1 + (last_gain / last_loss))
 
-            # 月內高低 (加入防空保護)
             month_df = df[df.index.month == now.month]
-            if month_df.empty: month_df = df.tail(20) # 跨月首日保護
+            if month_df.empty: month_df = df.tail(20)
             month_low = month_df['Low'].min()
             dist_low = (price/month_low-1)*100 if month_low > 0 else 0
 
@@ -111,18 +107,17 @@ def run_unified_experiment():
             })
 
             report.append(
-                f"\n📍 {cfg['name']}\n"
-                f"💵 {price:.2f} | 月低 {month_low:.2f}\n"
-                f"📊 {trend} | RSI {rsi:.1f}"
+                f"\n### 📍 {cfg['name']}\n"
+                f"💰 **現價:** `{price:.2f}` | **月低:** `{month_low:.2f}`\n"
+                f"📈 **趨勢:** {trend} | **RSI:** `{rsi:.1f}`"
             )
 
             if "🔴" in trend:
-                report.append("⛔ 趨勢轉空，網格暫停")
+                report.append("⚠️ **趨勢轉空，網格買入暫停**")
             else:
                 grid = build_grid(price)
                 per_cap = cfg["cap"]/GRID_LEVELS
 
-                # 買入邏輯
                 if allow_buy:
                     for i, gp in enumerate(grid):
                         if price <= gp and str(i) not in book["grid"]:
@@ -131,46 +126,47 @@ def run_unified_experiment():
                                 book["grid"][str(i)] = {"price": price, "qty": qty}
                                 book["shares"] += qty
                                 book["cost"] += qty * price
-                                report.append(f"🧩 買入 第{i+1}格 {qty} 股")
+                                report.append(f"✅ **買入** 第{i+1}格 {qty} 股")
                             break
                 else:
-                    report.append(f"⏸ AI 建議: {ai_decision}")
+                    report.append(f"⏸ **AI 建議:** {ai_decision}")
 
-                # 反向賣出 (利潤鎖定)
                 for k, v in list(book["grid"].items()):
                     if price >= v["price"] * (1 + TAKE_PROFIT_PCT):
                         book["shares"] -= v["qty"]
                         book["cost"] -= v["price"] * v["qty"]
                         del book["grid"][k]
-                        report.append(f"💰 賣出 第{int(k)+1}格 (獲利結清)")
+                        report.append(f"🎊 **賣出** 第{int(k)+1}格 (獲利結清)")
 
             if book["shares"] > 0:
                 avg = book["cost"] / book["shares"]
                 pnl = (price - avg) * book["shares"]
                 roi = (pnl / book["cost"] * 100) if book["cost"] > 0 else 0
-                report.append(f"📒 持股 {book['shares']} | 均價 {avg:.2f} | 損益 {pnl:.0f} ({roi:.1f}%)")
+                report.append(f"📒 持股: `{book['shares']}` | 均價: `{avg:.2f}` | 損益: `{pnl:.0f}` (**{roi:.1f}%**)")
 
             ledger[symbol] = book
             log_decision(symbol, price, ai, (True, trend))
 
         except Exception as e:
-            report.append(f"❌ {symbol} 執行異常: {str(e)[:30]}")
+            report.append(f"❌ {symbol} 異常: `{str(e)[:30]}`")
 
     save_ledger(ledger)
 
-    # LINE 推播服務
-    if LINE_TOKEN and USER_ID:
-        headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
-        for i in range(0, len(report), 20):
-            msg = "\n".join(report[i:i+20])
+    # 💡 替換為 Discord Webhook 發送邏輯
+    if DISCORD_WEBHOOK_URL:
+        # Discord 單次訊息上限為 2000 字，將報告分段發送
+        full_msg = "\n".join(report)
+        for i in range(0, len(full_msg), 1900):
+            payload = {
+                "username": "AI 網格交易員",
+                "content": full_msg[i:i+1900]
+            }
             try:
-                requests.post(
-                    "https://api.line.me/v2/bot/message/push",
-                    headers=headers,
-                    json={"to": USER_ID, "messages": [{"type": "text", "text": msg}]},
-                    timeout=10
-                )
-            except:
-                print("❌ LINE 推播發送失敗")
+                # Discord 成功回傳的是 204 No Content
+                res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+                if res.status_code != 204:
+                    print(f"❌ Discord 報錯: {res.text}")
+            except Exception as e:
+                print(f"❌ Discord 請求失敗: {e}")
 
     return "\n".join(report)
