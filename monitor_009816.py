@@ -20,8 +20,7 @@ def get_realtime_data(ticker):
         df = t.history(period="5d", timeout=10)
         if df is not None and not df.empty and len(df) >= 2:
             curr = round(float(df["Close"].iloc[-1]), 2)
-            # --- 關鍵修正：數據校驗 ---
-            # 009816 如果抓到 10.0 或 0.0，通常是 yfinance 抓取失敗的佔位符
+            # --- 數據校驗 ---
             if (ticker == "009816.TW" and curr == 10.0) or curr <= 0:
                 print(f"⚠️ 偵測到離譜即時價格: {curr}，嘗試改從 info 抓取...")
                 curr = t.info.get('regularMarketPrice', None)
@@ -35,11 +34,10 @@ def get_realtime_data(ticker):
     return None, None
 
 # --------------------------------------------------
-# AI 安全包裝（維持您的穩健判斷邏輯）
+# AI 安全包裝
 # --------------------------------------------------
 def safe_ai_point(extra, target_name, summary):
     try:
-        # 增加超時保護，避免 AI 卡死
         ai = get_ai_point(extra, target_name, summary_override=summary)
         if not ai or "decision" not in ai:
             return {"decision": "中性觀望", "confidence": 30, "reason": "AI 回傳格式不符"}
@@ -53,45 +51,48 @@ def safe_ai_point(extra, target_name, summary):
 def run_009816_monitor():
     print("🦅 啟動 009816 AI 數據精準校準引擎")
 
-    # 1. 抓取即時價格
+    # 1. 抓取即時價格 (加入 None 保護)
     price, _ = get_realtime_data("009816.TW")
     _, sox_pct = get_realtime_data("^SOX")
     _, tsm_pct = get_realtime_data("TSM")
 
-    # 2. 抓取 FinMind 歷史資料（天數拉長到 45 天確保 RSI 準確）
+    # 避免格式化 None 報錯
+    sox_pct = sox_pct if sox_pct is not None else 0.0
+    tsm_pct = tsm_pct if tsm_pct is not None else 0.0
+
+    # 2. 抓取 FinMind 歷史資料
     df = get_fm_data("TaiwanStockPrice", "009816.TW", days=45)
     
-    # 3. 數據完整性檢查
-    if (df is None or df.empty) and price is None:
-        print("❌ 完全抓不到數據，終止監控"); return
-
     if df is not None and not df.empty:
         df['close'] = pd.to_numeric(df['close'], errors='coerce')
         df = df.dropna(subset=['close'])
+        df = df[df['close'] != 10.0] # 💡 同步過濾歷史髒數據
         closes = df["close"]
     else:
-        # 如果 FinMind 掛了但即時價格還有，建立最小 DataFrame
-        closes = pd.Series([price] * 20)
+        closes = pd.Series([price] * 20) if price else pd.Series([])
 
-    # 如果即時價格失效，用歷史最後一筆補位
-    if price is None or price == 10.0:
+    # 數據徹底失效檢查
+    if (price is None or price == 10.0) and (not closes.empty):
         price = round(float(closes.iloc[-1]), 2)
-        if price == 10.0: # 如果連歷史最後一筆都是 10.0，代表數據源徹底髒了
-            print("⚠️ 歷史數據庫也存在離譜值，停止分析"); return
+    
+    if price is None or price <= 0 or price == 10.0:
+        print("❌ 數據源髒污且無法修復，終止監控"); return
 
     # 4. 計算指標
-    month_low = closes.tail(22).min() # 取最近一個月的最低
-    month_high = closes.tail(22).max()
+    recent_22 = closes.tail(22)
+    month_low = recent_22.min() if not recent_22.empty else price
     pct_from_low = round((price - month_low) / month_low * 100, 2)
 
-    # RSI 計算（修正 nan 問題）
+    # RSI 計算強化 (修正滾動 NaN 問題)
     delta = closes.diff()
-    gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
-    loss = -delta.clip(upper=0).rolling(14).mean().iloc[-1]
-    if loss == 0: rsi = 100 if gain > 0 else 50
-    else: rsi = round(100 - (100 / (1 + (gain/loss))), 1)
+    up = delta.clip(lower=0).rolling(14).mean()
+    down = -delta.clip(upper=0).rolling(14).mean()
+    if not down.empty and down.iloc[-1] != 0:
+        rsi = round(100 - (100 / (1 + (up.iloc[-1] / down.iloc[-1]))), 1)
+    else:
+        rsi = 50.0
 
-    # 5. 趨勢與技術結構
+    # 5. 趨勢判斷
     trend = "盤整"
     if len(closes) >= 20:
         ma10 = closes.rolling(10).mean().iloc[-1]
@@ -100,33 +101,31 @@ def run_009816_monitor():
         elif price < ma10 < ma20: trend = "空頭"
 
     tech = []
-    # 布林帶判斷
     if len(closes) >= 20:
         std = closes.tail(20).std()
-        ma20 = closes.tail(20).mean()
-        if price < ma20 - 2*std: tech.append("布林:超跌")
-        elif price > ma20 + 2*std: tech.append("布林:過熱")
+        ma20_val = closes.tail(20).mean()
+        if price < ma20_val - 2*std: tech.append("布林:超跌")
+        elif price > ma20_val + 2*std: tech.append("布林:過熱")
         else: tech.append("布林:中軌區域")
 
     # 6. 籌碼與 AI 分析
     extra = get_high_level_insight("009816.TW") or {}
-    
-    # 強化摘要：直接告訴 AI 哪些數據是準確的，防止它參考錯誤資訊
     summary = (
         f"現價:{price:.2f}, 月低:{month_low:.2f}, 距月低:{pct_from_low:.2f}%\n"
         f"RSI:{rsi}, 趨勢:{trend}, 費半:{sox_pct:+.2f}%, TSM:{tsm_pct:+.2f}%\n"
-        f"技術結構:{' / '.join(tech)}, 法人:{extra.get('inst','normal')}"
+        f"技術結構:{' / '.join(tech) if tech else '正常'}, 法人:{extra.get('inst','normal')}"
     )
 
     ai = safe_ai_point(extra, "009816", summary)
     gate_ok, gate_reason = hard_risk_gate(price, extra)
 
-    # 7. 最終決策
+    # 7. 最終決策 (放寬判定條件，增加 "可行" 字串包含判斷)
+    ai_decision = ai.get('decision', '觀望')
     buy_signal = (pct_from_low <= 1.5 or rsi < 35) and trend != "空頭"
     
     if not gate_ok:
         action = f"⛔【風控攔截】{gate_reason}"
-    elif buy_signal and ai.get('decision') == "可行":
+    elif buy_signal and ("可行" in ai_decision or "買入" in ai_decision):
         action = f"🟢【可分批佈局】接近月低 ({pct_from_low}%)"
     else:
         action = f"⏸【觀望】數據未達買入標準"
@@ -143,8 +142,12 @@ def run_009816_monitor():
     )
 
     if LINE_TOKEN and USER_ID:
-        requests.post("https://api.line.me/v2/bot/message/push",
-                      headers={"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"},
-                      json={"to": USER_ID, "messages": [{"type": "text", "text": msg}]}, timeout=10)
+        try:
+            res = requests.post("https://api.line.me/v2/bot/message/push",
+                          headers={"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"},
+                          json={"to": USER_ID, "messages": [{"type": "text", "text": msg}]}, timeout=10)
+            res.raise_for_status()
+        except Exception as e:
+            print(f"❌ LINE 推播失敗: {e}")
 
     return ai
