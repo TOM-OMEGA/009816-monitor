@@ -12,24 +12,39 @@ def run_009816_monitor(force_send=True):
 
     payload = {
         "username": "AI 監控助理",
-        "content": f"🦅 **系統巡檢回報**\n時間: `{now_str}`\n狀態: 🟢 監控中"
+        "content": f"🦅 **系統巡檢回報**\n時間: `{now_str}`\n狀態: 🟢 監控運作中"
     }
 
-    # 💡 增加重試邏輯處理 429
-    for i in range(3): # 最多嘗試 3 次
-        res = requests.post(webhook_url, json=payload, timeout=10)
-        
-        if res.status_code == 204:
-            return "✅ Discord 發送成功！"
-        
-        elif res.status_code == 429:
-            # 取得 Discord 建議的等待時間（秒）
-            retry_after = res.json().get('retry_after', 5) / 1000
-            print(f"⚠️ 觸發頻率限制，等待 {retry_after} 秒...", flush=True)
-            time.sleep(retry_after + 0.5)
-            continue
+    # 嘗試發送，最多重試 2 次
+    for attempt in range(3):
+        try:
+            res = requests.post(webhook_url, json=payload, timeout=10)
             
-        else:
+            # 204 是 Discord 的正常回傳代碼 (No Content)
+            if res.status_code == 204:
+                return "✅ Discord 發送成功！"
+            
+            # 處理 429 頻率限制
+            if res.status_code == 429:
+                # 只有當回傳內容不為空時才嘗試解析 JSON
+                wait_time = 5 # 預設等待 5 秒
+                if res.text:
+                    try:
+                        wait_time = res.json().get('retry_after', 5000) / 1000
+                    except:
+                        pass
+                
+                print(f"⚠️ 觸發頻率限制，等待 {wait_time} 秒後重試...", flush=True)
+                time.sleep(wait_time + 0.1)
+                continue
+            
             return f"❌ Discord 拒絕 (代碼 {res.status_code}): {res.text}"
             
-    return "❌ 經過多次嘗試後仍失敗 (429 Rate Limit)"
+        except requests.exceptions.RequestException as e:
+            # 處理網路超時或連線失敗
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            return f"❌ 網路連線異常: {str(e)}"
+            
+    return "❌ 經過多次嘗試後仍失敗 (可能是頻率過高或網路問題)"
