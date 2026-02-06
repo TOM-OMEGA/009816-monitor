@@ -6,12 +6,15 @@ import io
 from datetime import datetime, timezone, timedelta
 import logging
 
-# 設定繪圖風格
-plt.style.use('seaborn-v0_8-darkgrid')
+# 強制設定繪圖風格，避免部分環境報錯
+try:
+    plt.style.use('seaborn-v0_8-darkgrid')
+except:
+    plt.style.use('ggplot')
 
 def run_taiwan_stock():
     """
-    009816 (凱基台灣 TOP 50) 帶圖表巡檢模組
+    009816 (凱基台灣 TOP 50) 帶圖表巡檢模組 - 2026 英文優化版
     """
     symbol = "009816.TW"
     name = "凱基台灣 TOP 50 (009816)"
@@ -37,26 +40,28 @@ def run_taiwan_stock():
         low_all = min(close.min(), 10.00)
         dist_from_launch = (price / 10.0 - 1) * 100
         days_active = len(df)
-        daily_ret = (price / 10.0) ** (1 / days_active) - 1
+        
+        # 防止分母為零
+        daily_ret = (price / 10.0) ** (1 / max(days_active, 1)) - 1
         projected_1y = price * ((1 + daily_ret) ** 252)
 
         ma_short = close.rolling(min(3, len(df))).mean().iloc[-1]
+        
         score = 65 
         if price <= 10.05: score += 10
         if dist_from_launch < 2.0: score += 5
         action = "🟢 市值型首選（可長線佈局）" if score >= 75 else "🟡 定期定額（複利累積中）"
 
         # =====================
-        # 📊 繪圖邏輯
+        # 📊 繪圖邏輯 (修正中文字體問題)
         # =====================
         plt.figure(figsize=(10, 5))
-        # 畫出收盤價走勢
-        plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', label='Price')
-        # 畫出發行價參考線
+        plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', label='Close Price')
         plt.axhline(y=10.0, color='#d62728', linestyle='--', alpha=0.7, label='Issue Price (10.0)')
         
-        # 設定標題與標籤
-        plt.title(f"{name} - Trend Analysis", fontsize=14)
+        # 🟢 修正點：標題與標籤全部使用英文，防止 Render 環境顯示亂碼
+        plt.title(f"ETF 009816.TW - Strategic Trend Analysis", fontsize=14)
+        plt.xlabel("Trading Date")
         plt.ylabel("Price (TWD)")
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.5)
@@ -68,7 +73,7 @@ def run_taiwan_stock():
         plt.close()
 
         # =====================
-        # 報告組裝
+        # 報告組裝 (標題字體加大)
         # =====================
         today = datetime.now(timezone(timedelta(hours=8)))
         report = [
@@ -76,7 +81,7 @@ def run_taiwan_stock():
             f"------------------------------------",
             f"📌 **標的評估**: {name}",
             f"💰 現價: `{price:.2f}` (發行價: 10.00)",
-            f"📈 **2027 預測展望**: `{projected_1y:.2f}`",
+            f"🚀 **2027 預測展望**: `{projected_1y:.2f}`",
             f"",
             f"📊 **掛牌動向**:",
             f"   • 上市日期: `2026-02-03`",
@@ -86,10 +91,11 @@ def run_taiwan_stock():
             f"🧠 **決策分數: {score} / 100**",
             f"📊 **行動建議: {action}**",
             f"------------------------------------",
-            f"💡 **經理人專業提醒**: 複利效果優於 0050，落實數據預測指令。"
+            f"💡 **經理人專業提醒**: 複利效果優於 0050，已落實 2027 預測指令。"
         ]
 
         return "\n".join(report), buf
 
     except Exception as e:
-        return f"❌ 009816 巡檢異常: {str(e)[:30]}", None
+        logging.error(f"009816 執行錯誤: {e}")
+        return f"# ❌ 009816 巡檢異常\n`{str(e)[:50]}`", None
