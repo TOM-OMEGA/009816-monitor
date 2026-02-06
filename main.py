@@ -1,4 +1,4 @@
-# main.py（Render 免費 Web Service，Discord 自動重試 + 限流延遲）
+# main.py（Render 免費 Web Service 專用）
 import os
 import logging
 import requests
@@ -8,7 +8,7 @@ import json
 import time
 
 # =========================
-# 導入 AI 模組
+# 導入你的 AI 模組（一次載入，避免 Render 卡死）
 # =========================
 from monitor_009816 import run_taiwan_stock
 from new_ten_thousand_grid import run_grid
@@ -21,53 +21,42 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 app = Flask(__name__)
 
 # =========================
-# Discord Webhook 安全發送（自動重試 3 次）
+# Discord Webhook（新版安全發送）
 # =========================
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip() or None
 
-def send_discord_safe(msg: str, max_retries=3, delay_sec=5):
-    """安全發送 Discord，訊息過長自動分段，遇 429 或失敗自動重試"""
+def send_discord(msg: str, delay_sec: float = 2.0):
+    """
+    安全發送 Discord，訊息過長自動切割，避免限流
+    delay_sec: 每段訊息發送前等待秒數
+    """
     if not WEBHOOK:
         logging.error("❌ DISCORD_WEBHOOK_URL 未設定")
         return False
 
     max_len = 1900
-    success = True
+    parts = [msg[i:i+max_len] for i in range(0, len(msg), max_len)]
 
-    for i in range(0, len(msg), max_len):
-        part = msg[i:i+max_len]
-        for attempt in range(1, max_retries+1):
+    for part in parts:
+        for attempt in range(3):  # 最多重試 3 次
             try:
                 r = requests.post(WEBHOOK, json={"content": part}, timeout=15)
-                if r.status_code == 429:
-                    logging.warning(f"⚠️ Discord 限流 429，等待 {delay_sec} 秒後重試 ({attempt}/{max_retries})")
+                logging.info(f"Discord status {r.status_code}")
+                if r.status_code == 204:  # 成功
+                    break
+                elif r.status_code == 429:
+                    logging.warning(f"⚠️ Discord 限流 429，等待 {delay_sec} 秒重試 ({attempt+1}/3)")
                     time.sleep(delay_sec)
-                    continue
-                elif r.status_code not in (200, 204):
-                    logging.warning(f"⚠️ Discord 發送異常，狀態碼 {r.status_code}，重試 ({attempt}/{max_retries})")
-                    time.sleep(delay_sec)
-                    continue
                 else:
-                    logging.info(f"Discord status {r.status_code}")
+                    logging.error(f"❌ Discord 發送失敗: {r.status_code} {r.text}")
                     break
             except Exception as e:
-                logging.exception(f"Discord 發送失敗，重試 ({attempt}/{max_retries})")
+                logging.exception(f"Discord 發送異常: {e}")
                 time.sleep(delay_sec)
         else:
-            logging.error("❌ Discord 發送多次失敗，跳過")
-            success = False
-    return success
-
-# =========================
-# 手機測試輔助：回傳任務 URL
-# =========================
-def notify_mobile_run_url(route: str):
-    base_url = os.environ.get("RENDER_EXTERNAL_URL")
-    if not base_url:
-        logging.warning("⚠️ 無法通知手機測試，RENDER_EXTERNAL_URL 未設定")
-        return
-    url = f"{base_url}{route}"
-    send_discord_safe(f"📱 手機測試 URL：{url}")
+            logging.error("❌ Discord 發送多次失敗，跳過此段訊息")
+        time.sleep(delay_sec)  # 每段訊息間等待，降低限流機率
+    return True
 
 # =========================
 # 首頁
@@ -86,7 +75,7 @@ def home():
     """
 
 # =========================
-# 任務安全包裝
+# 執行任務安全包裝
 # =========================
 def safe_run(func, name):
     try:
@@ -103,10 +92,9 @@ def safe_run(func, name):
 # =========================
 @app.route("/run/tw")
 def run_tw():
-    notify_mobile_run_url("/run/tw")
-    send_discord_safe("📊【台股存股 AI】開始分析")
+    send_discord("📊【台股存股 AI】開始分析")
     result = safe_run(run_taiwan_stock, "台股存股 AI")
-    send_discord_safe(f"📊【台股存股 AI】結果\n{result}")
+    send_discord(f"📊【台股存股 AI】結果\n{result}")
     return "OK"
 
 # =========================
@@ -114,10 +102,9 @@ def run_tw():
 # =========================
 @app.route("/run/grid")
 def run_grid_route():
-    notify_mobile_run_url("/run/grid")
-    send_discord_safe("🧱【台股網格 AI】開始分析")
+    send_discord("🧱【台股網格 AI】開始分析")
     result = safe_run(run_grid, "台股網格 AI")
-    send_discord_safe(f"🧱【台股網格 AI】結果\n{result}")
+    send_discord(f"🧱【台股網格 AI】結果\n{result}")
     return "OK"
 
 # =========================
@@ -125,10 +112,9 @@ def run_grid_route():
 # =========================
 @app.route("/run/us")
 def run_us():
-    notify_mobile_run_url("/run/us")
-    send_discord_safe("🌎【美股盤後 AI】開始分析")
+    send_discord("🌎【美股盤後 AI】開始分析")
     result = safe_run(run_us_ai, "美股盤後 AI")
-    send_discord_safe(f"🌎【美股盤後 AI】結果\n{result}")
+    send_discord(f"🌎【美股盤後 AI】結果\n{result}")
     return "OK"
 
 # =========================
@@ -136,14 +122,13 @@ def run_us():
 # =========================
 @app.route("/run/all")
 def run_all():
-    notify_mobile_run_url("/run/all")
-    send_discord_safe("🚀【AI 任務】全部執行")
+    send_discord("🚀【AI 任務】全部執行")
 
     r1 = safe_run(run_taiwan_stock, "台股存股 AI")
     r2 = safe_run(run_grid, "台股網格 AI")
     r3 = safe_run(run_us_ai, "美股盤後 AI")
 
-    send_discord_safe(
+    send_discord(
         "✅【AI 任務完成】\n"
         f"台股存股：{r1}\n\n"
         f"台股網格：{r2}\n\n"
