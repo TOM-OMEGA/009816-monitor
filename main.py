@@ -1,17 +1,18 @@
+# main.py（Render 免費 Web Service 專用）
 import os
 import logging
 import requests
-from flask import Flask, jsonify
+from flask import Flask
 from datetime import datetime
 import json
 import time
 
 # =========================
-# 導入你的 AI 模組
+# 導入你的 AI 模組（一次載入，避免 Render 卡死）
 # =========================
 from monitor_009816 import run_taiwan_stock
 from new_ten_thousand_grid import run_grid
-from us_post_market_robot import run_us_ai  # 已修改為 Discord 版本
+from us_post_market_robot import run_us_ai
 
 # =========================
 # 基本設定
@@ -25,7 +26,7 @@ app = Flask(__name__)
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip() or None
 
 def send_discord(msg: str = None, file_path: str = None):
-    """安全發送 Discord，訊息過長自動分段 + 支援附件"""
+    """安全發送 Discord，支援文字 + 附件 + 限流重試"""
     if not WEBHOOK:
         logging.error("❌ DISCORD_WEBHOOK_URL 未設定")
         return False
@@ -41,11 +42,14 @@ def send_discord(msg: str = None, file_path: str = None):
                 try:
                     r = requests.post(WEBHOOK, json={"content": part}, timeout=15)
                     if r.status_code == 429:
-                        retry = r.json().get("retry_after", 5)
+                        retry = float(r.headers.get("Retry-After", 5))
                         logging.warning(f"⚠️ Discord 限流 429，等待 {retry} 秒重試 ({attempt+1}/5)")
                         time.sleep(retry)
                         continue
-                    r.raise_for_status()
+                    elif r.status_code not in (200, 204):
+                        logging.warning(f"⚠️ Discord 發送異常，狀態碼 {r.status_code}")
+                        time.sleep(2 ** attempt)
+                        continue
                     logging.info(f"Discord 發送成功，狀態碼 {r.status_code}")
                     break
                 except Exception as e:
@@ -63,59 +67,36 @@ def send_discord(msg: str = None, file_path: str = None):
                 with open(file_path, "rb") as f:
                     r = requests.post(WEBHOOK, files={"file": f}, timeout=30)
                 if r.status_code == 429:
-                    retry = r.json().get("retry_after", 5)
-                    logging.warning(f"⚠️ Discord 限流 429 圖片，等待 {retry} 秒重試 ({attempt+1}/5)")
+                    retry = float(r.headers.get("Retry-After", 5))
+                    logging.warning(f"⚠️ Discord 限流 429 圖片/檔案，等待 {retry} 秒重試 ({attempt+1}/5)")
                     time.sleep(retry)
                     continue
-                r.raise_for_status()
-                logging.info(f"Discord 圖片發送成功，狀態碼 {r.status_code}")
+                elif r.status_code not in (200, 204):
+                    logging.warning(f"⚠️ Discord 附件發送異常，狀態碼 {r.status_code}")
+                    time.sleep(2 ** attempt)
+                    continue
+                logging.info(f"Discord 附件發送成功，狀態碼 {r.status_code}")
                 break
             except Exception as e:
                 wait = 2 ** attempt
-                logging.warning(f"⚠️ Discord 圖片發送失敗: {e}，等待 {wait} 秒後重試")
+                logging.warning(f"⚠️ Discord 附件發送失敗: {e}，等待 {wait} 秒後重試")
                 time.sleep(wait)
         else:
-            logging.error("❌ Discord 圖片發送多次失敗，跳過")
+            logging.error("❌ Discord 附件發送多次失敗，跳過")
             success = False
 
     return success
 
-# =========================
-# 執行任務安全包裝
-# =========================
-def safe_run(func, name):
-    try:
-        result = func()
-        if isinstance(result, dict):
-            result = json.dumps(result, ensure_ascii=False)
-        return result
-    except Exception as e:
-        logging.exception(f"{name} 執行失敗")
-        return f"❌ {name} 執行失敗: {str(e)}"
-
-# =========================
-# 路由函式生成器（統一 JSON 回傳）
-# =========================
-def create_route(func, name, send_file=False):
-    def route():
-        message = f"🚀【{name}】開始分析"
-        discord_ok = send_discord(message)
-
-        result = safe_run(func, name)
-        # 如果是 US AI，可能有圖片
-        file_path = None
-        if send_file and hasattr(func, "PLOT_FILE"):
-            file_path = func.PLOT_FILE
-
-        discord_ok &= send_discord(result, file_path=file_path)
-
-        status = "success" if discord_ok else "fail"
-        return jsonify({
-            "status": status,
-            "message": result,
-            "discord_sent": discord_ok
-        })
-    return route
+def save_and_send_file(content: str, prefix: str):
+    """將內容存成文字檔，附上時間戳，然後透過 Discord 附件發送"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{prefix}_{timestamp}.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+    logging.info(f"✅ 已將結果存成檔案 {filename}")
+    send_discord(file_path=filename)
+    os.remove(filename)
+    logging.info(f"🗑 已刪除暫存檔 {filename}")
 
 # =========================
 # 首頁
@@ -134,37 +115,63 @@ def home():
     """
 
 # =========================
-# 註冊路由
+# 執行任務安全包裝
 # =========================
-app.add_url_rule("/run/tw", "run_tw", create_route(run_taiwan_stock, "台股存股 AI"))
-app.add_url_rule("/run/grid", "run_grid", create_route(run_grid, "台股網格 AI"))
-app.add_url_rule("/run/us", "run_us", create_route(run_us_ai, "美股盤後 AI", send_file=True))
+def safe_run(func, name):
+    try:
+        result = func()
+        if isinstance(result, dict):
+            result = json.dumps(result, ensure_ascii=False, indent=2)
+        return result
+    except Exception as e:
+        logging.exception(f"{name} 執行失敗")
+        return f"❌ {name} 執行失敗: {str(e)}"
 
+# =========================
+# 台股存股
+# =========================
+@app.route("/run/tw")
+def run_tw():
+    send_discord("📊【台股存股 AI】開始分析")
+    result = safe_run(run_taiwan_stock, "台股存股 AI")
+    save_and_send_file(result, "tw_result")
+    return "OK"
+
+# =========================
+# 台股網格
+# =========================
+@app.route("/run/grid")
+def run_grid_route():
+    send_discord("🧱【台股網格 AI】開始分析")
+    result = safe_run(run_grid, "台股網格 AI")
+    save_and_send_file(result, "grid_result")
+    return "OK"
+
+# =========================
+# 美股盤後
+# =========================
+@app.route("/run/us")
+def run_us():
+    send_discord("🌎【美股盤後 AI】開始分析")
+    result = safe_run(run_us_ai, "美股盤後 AI")
+    save_and_send_file(result, "us_result")
+    return "OK"
+
+# =========================
+# 全部一次
+# =========================
 @app.route("/run/all")
 def run_all():
-    results = {}
-    discord_ok = send_discord("🚀【AI 任務】全部執行")
+    send_discord("🚀【AI 任務】全部執行")
 
     r1 = safe_run(run_taiwan_stock, "台股存股 AI")
-    results["台股存股 AI"] = r1
     r2 = safe_run(run_grid, "台股網格 AI")
-    results["台股網格 AI"] = r2
     r3 = safe_run(run_us_ai, "美股盤後 AI")
-    results["美股盤後 AI"] = r3
 
-    # 對 US AI 加入附件
-    file_path = getattr(run_us_ai, "PLOT_FILE", None)
-    if file_path:
-        discord_ok &= send_discord(r3, file_path=file_path)
-    else:
-        discord_ok &= send_discord(r3)
+    combined = f"台股存股：\n{r1}\n\n台股網格：\n{r2}\n\n美股盤後：\n{r3}"
+    save_and_send_file(combined, "all_result")
 
-    status = "success" if discord_ok else "fail"
-    return jsonify({
-        "status": status,
-        "message": results,
-        "discord_sent": discord_ok
-    })
+    return "ALL DONE"
 
 # =========================
 # Render 啟動
