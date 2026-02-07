@@ -67,7 +67,7 @@ def background_inspection():
     
     # 0. 啟動通知
     dc_log(f"# 🛰️ AI 投資監控系統：巡檢啟動\n時間: `{now_str}`")
-    time.sleep(5) 
+    time.sleep(3) 
 
     # 1. 執行台股監控
     try:
@@ -77,7 +77,7 @@ def background_inspection():
             dc_log(msg, file_buf=img, filename="taiwan_stock.png")
         else:
             dc_log(result1)
-        time.sleep(10) # 加長間隔
+        time.sleep(5) # 加長間隔
     except Exception as e:
         dc_log(f"⚠️ **台股模組異常**: `{str(e)}`")
 
@@ -89,7 +89,7 @@ def background_inspection():
             dc_log(msg, file_buf=img, filename="grid_report.png")
         else:
             dc_log(result2)
-        time.sleep(12) 
+        time.sleep(6) 
     except Exception as e:
         dc_log(f"⚠️ **網格模組異常**: `{str(e)}`")
 
