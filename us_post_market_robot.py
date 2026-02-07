@@ -6,7 +6,7 @@ import io
 from datetime import datetime, timedelta, timezone
 import logging
 
-# 強制 Agg 後端，避免 Render 環境報錯
+# 強制 Agg 後端
 import matplotlib
 matplotlib.use('Agg')
 
@@ -17,14 +17,12 @@ TARGETS = list(TARGETS_MAP.keys())
 def compute_indicators(df):
     """計算趨勢、RSI與動能分值"""
     close = df['Close']
-    # RSI
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss.replace(0, 0.001)
     rsi = 100 - (100 / (1 + rs))
     
-    # 均線
     ma20 = close.rolling(20).mean()
     ma60 = close.rolling(60).mean()
     
@@ -51,7 +49,9 @@ def compute_indicators(df):
     }
 
 def generate_us_dashboard(dfs):
-    """繪製美股多維度決策儀表板"""
+    """繪製美股儀表板 (已漢化標籤)"""
+    # 設置中文字體 (針對 Linux/Render 環境常用字體)
+    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft JhengHei', 'DejaVu Sans']
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
     for symbol, df in dfs.items():
@@ -65,24 +65,24 @@ def generate_us_dashboard(dfs):
         rsi = 100 - (100 / (1 + (gain / loss.replace(0, 0.001))))
         ax3.plot(df.index, rsi, label=f"{name} RSI", linestyle='--')
 
-    ax1.set_title("Market Relative Performance (Base 100)", fontsize=14)
+    ax1.set_title("市場指數相對表現 (Base 100)", fontsize=14)
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # MACD 動能柱
+    # MACD 示意 (以 S&P 500 為主)
     gspc_close = dfs["^GSPC"]['Close']
     exp1 = gspc_close.ewm(span=12, adjust=False).mean()
     exp2 = gspc_close.ewm(span=26, adjust=False).mean()
     macd = exp1 - exp2
     signal = macd.ewm(span=9, adjust=False).mean()
     hist = macd - signal
-    colors = ['red' if h > 0 else 'green' for h in hist]
+    colors = ['#ff4d4d' if h > 0 else '#2ecc71' for h in hist]
     ax2.bar(dfs["^GSPC"].index, hist, color=colors, alpha=0.7)
-    ax2.set_title("S&P 500 MACD Momentum")
+    ax2.set_title("標普 500 動能分析 (MACD)")
     
     ax3.axhline(70, color='r', linestyle=':', alpha=0.5)
     ax3.axhline(30, color='g', linestyle=':', alpha=0.5)
-    ax3.set_title("RSI Relative Strength")
+    ax3.set_title("RSI 相對強弱熱度")
     
     plt.tight_layout()
     buf = io.BytesIO()
@@ -92,7 +92,7 @@ def generate_us_dashboard(dfs):
     return buf
 
 def run_us_ai():
-    logging.info("🚀 啟動美股盤後分析任務...")
+    logging.info("🚀 啟動美股盤後分析...")
     dfs = {}
     trade_date = "" 
     
@@ -109,10 +109,9 @@ def run_us_ai():
 
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 【關鍵修正】在報告最前面加上多個換行與橫線，並確保 # 前面沒有任何空格
+    # 修正重點：行首絕對不能有空格，確保 Discord 標題渲染生效
     report = [
-        "\n\n" + "—" * 15,
-        "# 美股盤後快報 🦅",
+        f"# 美股盤後快報 🦅",
         f"### 📅 交易日期： `{trade_date}`", 
         "========================"
     ]
@@ -127,15 +126,15 @@ def run_us_ai():
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
-        # 確保每行開頭都是乾淨的語法符號
+        # 使用 ## 確保字體放大，並將 Emoji 移至後方
         report.append(f"## {name} 📊")
-        report.append(f"💵 **收盤價**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
+        report.append(f"💵 **最新收盤**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
         report.append(f"🔍 **趨勢狀態**： {info['trend']}")
         report.append(f"📈 **RSI 指標**： `{info['rsi']:.1f}`")
         report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
         report.append("-" * 20)
         
-    report.append("# AI 決策中心：觀望中 🤖")
+    report.append(f"# AI 狀態：觀望中 🤖")
     report.append(f"發送時間：`{tw_now}`")
     
     img_buf = generate_us_dashboard(dfs)
