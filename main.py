@@ -19,24 +19,22 @@ WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 def dc_log(text, file_buf=None, filename="chart.png"):
     """
-    升級版公用發送函式：支援發送文字與單張圖片
+    公用發送函式：支援發送文字與單張圖片
     """
     if not WEBHOOK:
         logging.warning("⚠️ Webhook URL 未設定")
         return
     
     try:
-        # 確保 text 一定是字串，防止 BytesIO 物件混入
         clean_text = str(text)
         if len(clean_text) > 1950:
             clean_text = clean_text[:1950] + "..."
         
         # 情況 A: 有圖片附件
         if file_buf is not None:
-            file_buf.seek(0)  # 移至起始位置
+            file_buf.seek(0)
             files = {"file": (filename, file_buf, "image/png")}
             payload = {"content": clean_text}
-            # 注意：發送檔案時使用 data= 而非 json=
             res = requests.post(WEBHOOK, data=payload, files=files, timeout=20)
         
         # 情況 B: 純文字
@@ -54,15 +52,14 @@ def dc_log(text, file_buf=None, filename="chart.png"):
 # =========================
 def background_inspection():
     """
-    分段執行所有 AI 監控任務
+    分段執行 AI 監控任務，強制訊息物理隔離以維持大標題字體
     """
     start_time = time.time()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # 啟動通知
+    # 0. 巡檢啟動（獨立氣泡）
     dc_log(f"# 🛰️ AI 投資監控系統：巡檢啟動\n時間: `{now_str}`")
-    # 強制等待，確保啟動通知與第一份報告分開
-    time.sleep(3) 
+    time.sleep(5) 
 
     # 1. 執行 009816 監控
     try:
@@ -72,8 +69,8 @@ def background_inspection():
             dc_log(msg, file_buf=img, filename="009816_analysis.png")
         else:
             dc_log(result1)
-        # 【關鍵修正】增加等待時間至 5 秒，徹底切斷 Discord 的訊息合併（Grouping）
-        time.sleep(5) 
+        # 強制冷卻，避免與下一則合併
+        time.sleep(10) 
     except Exception as e:
         dc_log(f"⚠️ **009816 模組異常**: `{str(e)}`")
 
@@ -85,29 +82,24 @@ def background_inspection():
             dc_log(msg, file_buf=img, filename="grid_report.png")
         else:
             dc_log(result2)
-        # 【關鍵修正】再次強制冷卻
-        time.sleep(5) 
+        # 【關鍵冷卻】確保美股報告能以新訊息發出
+        time.sleep(12) 
     except Exception as e:
         dc_log(f"⚠️ **網格模組異常**: `{str(e)}`")
 
     # 3. 執行美股監控
     try:
-        # 【關鍵修正 A】發送一個獨立的物理分隔線，強迫 Discord 結算上一個訊息氣泡
-        dc_log("-------------------------------------------") 
-        
-        # 【關鍵修正 B】拉長等待時間至 8 秒，確保伺服器將其判定為新事件
-        time.sleep(8) 
-        
+        # 注意：此處不再發送任何中斷橫線，確保 run_us_ai() 的 # 標題出現在該則訊息第一行
         result3 = run_us_ai()
         if isinstance(result3, tuple) and len(result3) == 2:
             msg, img = result3
-            # 這裡的 msg 第一行必須是 # 標題
             dc_log(msg, file_buf=img, filename="us_market.png")
         else:
             dc_log(result3)
     except Exception as e:
         dc_log(f"⚠️ **美股模組異常**: `{str(e)}`")
-    time.sleep(2)
+
+    time.sleep(5)
     duration = time.time() - start_time
     dc_log(f"✅ **巡檢完成**\n總耗時: `{duration:.1f} 秒`\n系統狀態: 🟢 正常運行中")
 
