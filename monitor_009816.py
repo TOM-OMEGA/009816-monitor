@@ -13,21 +13,22 @@ import matplotlib
 matplotlib.use('Agg')
 
 # =====================
-# 🛠️ 中文字體配置 (讀取 GitHub 本地檔案)
+# 🛠️ 終極中文字體與符號解決方案
 # =====================
 def setup_chinese_font():
-    # 確保名稱與你上傳的檔案一模一樣
+    # 確保 NotoSansTC-Regular.ttf 已經上傳到 GitHub 根目錄
     font_filename = "NotoSansTC-Regular.ttf"
     font_path = os.path.join(os.getcwd(), font_filename)
     
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
         font_name = fm.FontProperties(fname=font_path).get_name()
-        plt.rcParams['font.family'] = font_name
+        # 設定回援機制：優先使用 Noto Sans TC，符號（Emoji）則由 DejaVu Sans 補位顯現
+        plt.rcParams['font.family'] = [font_name, 'DejaVu Sans', 'sans-serif']
         plt.rcParams['axes.unicode_minus'] = False 
-        logging.info(f"✅ 成功啟用本地字體: {font_name}")
+        logging.info(f"✅ 009816 模組：成功載入字體 {font_name} 及其符號回援機制")
     else:
-        logging.error(f"❌ 找不到字體檔: {font_filename}，請確認已上傳至 GitHub 根目錄")
+        logging.error(f"❌ 009816 模組：找不到字體檔 {font_filename}")
 
 # 初始化字體
 setup_chinese_font()
@@ -40,7 +41,7 @@ def run_taiwan_stock():
     name = "凱基台灣 TOP 50"
 
     try:
-        # 1. 抓取數據 (往前看一年以利判斷)
+        # 1. 抓取數據 (往前看一年以利精確判斷 [cite: 2026-02-02])
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="1y", timeout=15)
 
@@ -69,13 +70,13 @@ def run_taiwan_stock():
         action = "🟢 強勢佈局" if score >= 75 else "🟡 定期定額"
 
         # =====================
-        # 📊 繪圖邏輯 (使用本地字體)
+        # 📊 繪圖邏輯 (解決符號與中文字體)
         # =====================
         plt.figure(figsize=(10, 6))
         plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', linewidth=2, label='每日收盤價')
         plt.axhline(y=10.0, color='#d62728', linestyle='--', alpha=0.6, label='發行價 (10.0)')
         
-        # 這裡的標題會完美顯示中文
+        # 這裡的 Emoji (📈) 與中文將會完美顯現
         plt.title(f"📈 {name} (009816) 策略趨勢分析", fontsize=16, fontweight='bold', pad=15)
         plt.xlabel("交易日期", fontsize=12)
         plt.ylabel("價格 (TWD)", fontsize=12)
