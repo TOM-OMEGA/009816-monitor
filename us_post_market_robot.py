@@ -33,7 +33,7 @@ def compute_indicators(df):
     last_ma20 = ma20.iloc[-1]
     last_ma60 = ma60.iloc[-1]
     
-    # 趨勢判斷與燈號更換：多頭紅色/空頭綠色/盤整黃色
+    # 趨勢判斷與燈號更新：多頭紅色/空頭綠色/盤整黃色
     if last_price > last_ma20 > last_ma60: 
         trend = "🔴 強勢多頭"
     elif last_price < last_ma20 < last_ma60: 
@@ -43,7 +43,7 @@ def compute_indicators(df):
     else: 
         trend = "🟡 空頭反彈"
     
-    # 動能與機率
+    # 動能與機率 (模擬機率算法)
     up_score = 66 if last_rsi < 40 else 33 if last_rsi > 60 else 50
     down_score = 100 - up_score
     prob = 100 - last_rsi # 簡單逆向機率邏輯
@@ -58,7 +58,7 @@ def compute_indicators(df):
     }
 
 def generate_us_dashboard(dfs):
-    """繪製多維度儀表板"""
+    """繪製如圖 1000012027 的多維度儀表板"""
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
     for symbol, df in dfs.items():
@@ -115,10 +115,10 @@ def run_us_ai():
 
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 修正重點：標題行首不放 Emoji，確保字體放大
+    # 關鍵修正：行首絕對不留空格，符號與文字間留一個空格，Emoji 放最後
     report = [
         f"# 美股盤後快報 🦅",
-        f"### 📅 交易日期： `{trade_date}`", 
+        f"### 📅 交易日期：`{trade_date}`", 
         "========================"
     ]
     
@@ -132,15 +132,15 @@ def run_us_ai():
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
-        # 修正重點：## 之後直接接文字。Emoji 移到標籤內。
+        # 關鍵修正：## 之後直接接文字。字體不放大通常是因為這行開頭有看不到的空格。
         report.append(f"## {name} 📊")
-        report.append(f"💵 **最新收盤**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
-        report.append(f"🔍 **趨勢狀態**： {info['trend']}")
-        report.append(f"📈 **RSI 指標**： `{info['rsi']:.1f}`")
-        report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
+        report.append(f"💵 **最新收盤**：`{last_close:,.2f}` (**{pct:+.2f}%**)")
+        report.append(f"🔍 **趨勢狀態**：{info['trend']}")
+        report.append(f"📈 **RSI 指標**：`{info['rsi']:.1f}`")
+        report.append(f"🎯 **反彈機率**：`{info['prob']:.0f}%`")
         report.append("------------------------")
         
-    report.append("# AI 決策中心：觀望中 🤖")
+    report.append(f"# AI 狀態：觀望中 🤖")
     report.append(f"發送時間：`{tw_now}`")
     
     img_buf = generate_us_dashboard(dfs)
