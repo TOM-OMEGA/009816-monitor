@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import io
 import os
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,26 @@ import logging
 # 強制 Agg 後端
 import matplotlib
 matplotlib.use('Agg')
+
+# =====================
+# 🛠️ 終極中文解決方案 (讀取本地字體檔)
+# =====================
+def setup_chinese_font():
+    # 確保名稱與你上傳到 GitHub 的 NotoSansTC-Regular.ttf 完全一致
+    font_filename = "NotoSansTC-Regular.ttf"
+    font_path = os.path.join(os.getcwd(), font_filename)
+    
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        font_name = fm.FontProperties(fname=font_path).get_name()
+        plt.rcParams['font.family'] = font_name
+        plt.rcParams['axes.unicode_minus'] = False 
+        logging.info(f"✅ 美股模組：成功載入字體 {font_name}")
+    else:
+        logging.error(f"❌ 美股模組：找不到字體檔 {font_filename}，請檢查 GitHub 根目錄")
+
+# 初始化字體
+setup_chinese_font()
 
 # ==== 設定 ====
 TARGETS_MAP = {"^GSPC": "標普500", "^DJI": "道瓊工業", "^IXIC": "那斯達克", "TSM": "台積電ADR"}
@@ -54,14 +75,7 @@ def compute_indicators(df):
     }
 
 def generate_us_dashboard(dfs):
-    """繪製美股多維度決策儀表板 (修復亂碼 + 高清化)"""
-    
-    # 1. 究極亂碼修復：多重字體回退機制
-    plt.rcParams['font.sans-serif'] = [
-        'Noto Sans CJK TC', 'Microsoft JhengHei', 'PingFang TC', 
-        'Arial Unicode MS', 'DejaVu Sans', 'sans-serif'
-    ]
-    plt.rcParams['axes.unicode_minus'] = False # 關鍵：修復負號方塊
+    """繪製美股多維度決策儀表板 (高清中文版)"""
     
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
@@ -104,7 +118,6 @@ def generate_us_dashboard(dfs):
     
     plt.tight_layout()
     buf = io.BytesIO()
-    # 提高 DPI 到 180，讓手機看大標題更清晰
     plt.savefig(buf, format='png', dpi=180, bbox_inches='tight')
     buf.seek(0)
     plt.close()
@@ -117,7 +130,7 @@ def run_us_ai():
     
     for s in TARGETS:
         try:
-            # 往前看三個月以計算精確 MA
+            # 抓取數據 (往前看四個月確保指標精確度)
             df = yf.download(s, period="4mo", interval="1d", progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
@@ -132,7 +145,7 @@ def run_us_ai():
 
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 構建大標題格式報告
+    # 構建大標題報告
     report = [
         "# 美股盤後快報 🦅",
         f"### 📅 交易日期： `{trade_date}`",
@@ -154,7 +167,6 @@ def run_us_ai():
         report.append(f"🔍 **趨勢狀態**： {info['trend']}")
         report.append(f"📈 **RSI 指標**： `{info['rsi']:.1f}`")
         
-        # 針對 TSM 增加下週預期區間
         if symbol == "TSM":
             low, high = info['range']
             report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
