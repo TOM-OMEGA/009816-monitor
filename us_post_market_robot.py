@@ -141,9 +141,19 @@ def run_us_ai():
 
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
+# === AI 接入點 (傳入市場摘要文字) ===
+    from ai_expert import get_ai_point
+    market_summary = ""
+    for s, df in dfs.items():
+        info = compute_indicators(df)
+        market_summary += f"{TARGETS_MAP[s]}: 現價{info['price']:.1f}, RSI{info['rsi']:.1f}, 趨勢{info['trend']}\n"
+
+    ai_us = get_ai_point(target_name="美股大盤", strategy_type="us_market", extra_data=market_summary)
+
     report = [
         "# 美股盤後快報 🦅",
         f"### 📅 交易日期： `{trade_date}`",
+        f"🤖 **AI 宏觀展望**： {ai_us.get('reason')}", # 放在報告頂部
         "---"
     ]
     
