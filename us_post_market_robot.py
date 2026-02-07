@@ -116,10 +116,10 @@ def run_us_ai():
     # 台灣目前時間
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 修改：使用 # 與 ### 加大標題字體，日期改為實際交易日
+    # 修正：在符號與文字間補空格，確保 Discord 觸發大字體渲染
     report = [
         f"# 🦅 美股盤後快報",
-        f"### 📅 交易日期: `{trade_date}`", 
+        f"### 📅 交易日期： `{trade_date}`", 
         "========================"
     ]
     
@@ -133,16 +133,16 @@ def run_us_ai():
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
-        # 修改：增加 ## 加大標題字體，數值加粗
-        report.append(f"## 【{name}】")
-        report.append(f"💵 **收盤**: `{last_close:,.2f}` ({pct:+.2f}%)")
-        report.append(f"🔍 趨勢: {info['trend']} | RSI: {info['rsi']:.1f}")
-        report.append(f"📊 短線動能: 📈反彈{info['up']}分 vs 📉下跌{info['down']}分")
-        report.append(f"🎯 機率試算: 反彈機率{info['prob']:.0f}%")
+        # 修正：標題符號後補空格，數據內容使用粗體與大括號高亮
+        report.append(f"## 📊 【{name}】")
+        report.append(f"💵 **最新收盤**： `# {last_close:,.2f} #` ({pct:+.2f}%)")
+        report.append(f"🔍 **趨勢狀態**： {info['trend']}")
+        report.append(f"📈 **RSI 指標**： `{info['rsi']:.1f}`")
+        report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
         report.append("------------------------")
         
-    report.append("🤖 **AI 決策中心**：觀望 (信心度 0%)")
-    report.append(f"\n(台灣時間 {tw_now} 發送)")
+    report.append("# 🤖 AI 狀態：觀望中")
+    report.append(f"發送時間：`{tw_now}`")
     
     img_buf = generate_us_dashboard(dfs)
     
