@@ -31,7 +31,7 @@ def compute_indicators(df):
     last_ma20 = ma20.iloc[-1]
     last_ma60 = ma60.iloc[-1]
     
-    # 趨勢燈號更新：多頭紅色(🔴) / 空頭綠色(🟢) / 盤整黃色(🟡)
+    # 趨勢燈號校正：多頭紅色(🔴) / 空頭綠色(🟢) / 盤整黃色(🟡)
     if last_price > last_ma20 > last_ma60: 
         trend = "🔴 強勢多頭"
     elif last_price < last_ma20 < last_ma60: 
@@ -49,9 +49,11 @@ def compute_indicators(df):
     }
 
 def generate_us_dashboard(dfs):
-    """繪製美股儀表板 (已漢化標籤)"""
-    # 設置中文字體 (針對 Linux/Render 環境常用字體)
+    """繪製美股多維度決策儀表板"""
+    # 設置中文字體
     plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft JhengHei', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
     for symbol, df in dfs.items():
@@ -69,7 +71,7 @@ def generate_us_dashboard(dfs):
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # MACD 示意 (以 S&P 500 為主)
+    # S&P 500 MACD
     gspc_close = dfs["^GSPC"]['Close']
     exp1 = gspc_close.ewm(span=12, adjust=False).mean()
     exp2 = gspc_close.ewm(span=26, adjust=False).mean()
@@ -109,9 +111,9 @@ def run_us_ai():
 
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 修正重點：行首絕對不能有空格，確保 Discord 標題渲染生效
+    # 【關鍵：第一行必須直接是 #，前方絕不能有 \n 或任何字元】
     report = [
-        f"# 美股盤後快報 🦅",  # 確保這就是第一行，前面沒東西
+        f"# 美股盤後快報 🦅",
         f"### 📅 交易日期： `{trade_date}`", 
         "========================"
     ]
@@ -126,7 +128,7 @@ def run_us_ai():
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
-        # 使用 ## 確保字體放大，並將 Emoji 移至後方
+        # 標題 ## 後方直接接名稱，Emoji 放後面
         report.append(f"## {name} 📊")
         report.append(f"💵 **最新收盤**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
         report.append(f"🔍 **趨勢狀態**： {info['trend']}")
