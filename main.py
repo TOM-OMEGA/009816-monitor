@@ -19,7 +19,8 @@ WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 def dc_log(text, file_buf=None, filename="chart.png"):
     """
-    公用發送函式：支援發送文字與單張圖片
+    優化版發送函式：
+    若有圖片，會拆分為兩次發送（先文字後圖片），確保文字標題能觸發大字體渲染。
     """
     if not WEBHOOK:
         logging.warning("⚠️ Webhook URL 未設定")
@@ -30,18 +31,24 @@ def dc_log(text, file_buf=None, filename="chart.png"):
         if len(clean_text) > 1950:
             clean_text = clean_text[:1950] + "..."
         
-        # 情況 A: 有圖片附件
+        # 情況 A: 有圖片附件 -> 執行拆分發送邏輯
         if file_buf is not None:
+            # 1. 先發送純文字訊息，確保 Discord 渲染 # 大標題
+            requests.post(WEBHOOK, json={"content": clean_text}, timeout=15)
+            
+            # 2. 短暫延遲，確保訊息順序正確且不被合併
+            time.sleep(1.5)
+            
+            # 3. 單獨發送圖片檔案
             file_buf.seek(0)
             files = {"file": (filename, file_buf, "image/png")}
-            payload = {"content": clean_text}
-            res = requests.post(WEBHOOK, data=payload, files=files, timeout=20)
+            res = requests.post(WEBHOOK, files=files, timeout=20)
         
         # 情況 B: 純文字
         else:
             res = requests.post(WEBHOOK, json={"content": clean_text}, timeout=15)
             
-        if res.status_code not in [200, 204]:
+        if 'res' in locals() and res.status_code not in [200, 204]:
             logging.error(f"❌ Discord 發送失敗: {res.status_code}, {res.text}")
             
     except Exception as e:
@@ -52,27 +59,26 @@ def dc_log(text, file_buf=None, filename="chart.png"):
 # =========================
 def background_inspection():
     """
-    分段執行 AI 監控任務，強制訊息物理隔離以維持大標題字體
+    分段執行 AI 監控任務
     """
     start_time = time.time()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # 0. 巡檢啟動（獨立氣泡）
+    # 0. 巡檢啟動通知
     dc_log(f"# 🛰️ AI 投資監控系統：巡檢啟動\n時間: `{now_str}`")
-    time.sleep(5) 
+    time.sleep(3) 
 
-    # 1. 執行 009816 監控
+    # 1. 執行台股監控
     try:
         result1 = run_taiwan_stock()
         if isinstance(result1, tuple) and len(result1) == 2:
             msg, img = result1
-            dc_log(msg, file_buf=img, filename="009816_analysis.png")
+            dc_log(msg, file_buf=img, filename="taiwan_stock.png")
         else:
             dc_log(result1)
-        # 強制冷卻，避免與下一則合併
-        time.sleep(10) 
+        time.sleep(8) # 物理隔離時間
     except Exception as e:
-        dc_log(f"⚠️ **009816 模組異常**: `{str(e)}`")
+        dc_log(f"⚠️ **台股模組異常**: `{str(e)}`")
 
     # 2. 執行網格監控
     try:
@@ -82,14 +88,13 @@ def background_inspection():
             dc_log(msg, file_buf=img, filename="grid_report.png")
         else:
             dc_log(result2)
-        # 【關鍵冷卻】確保美股報告能以新訊息發出
-        time.sleep(12) 
+        time.sleep(8) 
     except Exception as e:
         dc_log(f"⚠️ **網格模組異常**: `{str(e)}`")
 
     # 3. 執行美股監控
     try:
-        # 注意：此處不再發送任何中斷橫線，確保 run_us_ai() 的 # 標題出現在該則訊息第一行
+        # 關鍵：這裡的美股報告會透過 dc_log 自動拆分發送，確保 "# 美股盤後快報" 變大
         result3 = run_us_ai()
         if isinstance(result3, tuple) and len(result3) == 2:
             msg, img = result3
@@ -99,12 +104,12 @@ def background_inspection():
     except Exception as e:
         dc_log(f"⚠️ **美股模組異常**: `{str(e)}`")
 
-    time.sleep(5)
+    time.sleep(3)
     duration = time.time() - start_time
-    dc_log(f"✅ **巡檢完成**\n總耗時: `{duration:.1f} 秒`\n系統狀態: 🟢 正常運行中")
+    dc_log(f"✅ **巡檢完成**\n耗時: `{duration:.1f} 秒`\n系統狀態: 🟢 正常運行")
 
 # =========================
-# 網頁路由 (Flask Routes)
+# 網頁路由保持不變
 # =========================
 @app.route("/")
 def index():
@@ -122,18 +127,9 @@ def index():
 
 @app.route("/run")
 def trigger():
-    if not WEBHOOK:
-        return "❌ 錯誤：請先在 Render 後台設定 DISCORD_WEBHOOK_URL"
-    
+    if not WEBHOOK: return "❌ 錯誤：未設定 Webhook URL"
     threading.Thread(target=background_inspection).start()
-    
-    return """
-    <div style="text-align: center; padding: 50px; font-family: sans-serif;">
-        <h2 style="color: green;">✅ 背景任務已啟動！</h2>
-        <p>請檢查 Discord 頻道。</p>
-        <a href="/">⬅ 返回首頁</a>
-    </div>
-    """
+    return "背景任務已啟動！請檢查 Discord。"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
