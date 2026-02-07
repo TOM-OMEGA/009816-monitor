@@ -75,7 +75,7 @@ def compute_indicators(df):
     }
 
 def generate_us_dashboard(dfs):
-    """繪製美股多維度決策儀表板 (修正符號顯現版)"""
+    """繪製美股多維度決策儀表板 (純淨文字版 - 移除 Emoji)"""
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
     for symbol, df in dfs.items():
@@ -90,8 +90,8 @@ def generate_us_dashboard(dfs):
         rsi = 100 - (100 / (1 + (gain / loss.replace(0, 0.001))))
         ax3.plot(df.index, rsi, label=f"{name}", alpha=0.8)
 
-    # 標題加入符號渲染優化
-    ax1.set_title("📊 市場指數相對表現 (基準 100)", fontsize=18, fontweight='bold', pad=20)
+    # 修改點：移除圖表標題內的 📊, 📈, 🔥 符號，確保 Render 環境文字渲染完全正確
+    ax1.set_title("市場指數相對表現 (基準 100)", fontsize=18, fontweight='bold', pad=20)
     ax1.legend(loc='upper left', fontsize=12)
     ax1.grid(True, linestyle='--', alpha=0.5)
     
@@ -104,13 +104,13 @@ def generate_us_dashboard(dfs):
     hist = macd - signal
     colors = ['#ff4d4d' if h > 0 else '#2ecc71' for h in hist]
     ax2.bar(dfs["^GSPC"].index, hist, color=colors, alpha=0.8, width=0.8)
-    ax2.set_title("📈 標普 500 市場動能 (MACD)", fontsize=16, fontweight='bold')
+    ax2.set_title("標普 500 市場動能 (MACD)", fontsize=16, fontweight='bold')
     ax2.grid(True, axis='y', alpha=0.3)
     
     # RSI 熱力
     ax3.axhline(70, color='#ff4d4d', linestyle='--', linewidth=1.5)
     ax3.axhline(30, color='#2ecc71', linestyle='--', linewidth=1.5)
-    ax3.set_title("🔥 RSI 強弱熱度掃描", fontsize=16, fontweight='bold')
+    ax3.set_title("RSI 強弱熱度掃描", fontsize=16, fontweight='bold')
     ax3.set_ylim(0, 100)
     
     plt.tight_layout()
@@ -126,7 +126,7 @@ def run_us_ai():
     
     for s in TARGETS:
         try:
-            # 抓取數據 (往前看一年以利精確分析 [cite: 2026-02-02])
+            # 抓取數據 (往前看一年以利精確分析)
             df = yf.download(s, period="1y", interval="1d", progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
@@ -172,6 +172,9 @@ def run_us_ai():
         
     report.append(f"# AI 狀態：系統運行中 🤖")
     report.append(f"發送時間：`{tw_now} (UTC+8)`")
+    report.append("---")
+    # 修改點：在報告末尾加入 Discord 專用圖表生成提示，讓文字與圖案各司其職
+    report.append(f"📈 **美股多維度決策儀表板已生成，請參閱下方附件**")
     
     img_buf = generate_us_dashboard(dfs)
     return "\n".join(report).strip(), img_buf
