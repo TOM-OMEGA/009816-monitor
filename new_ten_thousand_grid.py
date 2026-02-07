@@ -135,13 +135,23 @@ def run_grid():
             alloc_per_grid = (TEST_CAPITAL * cfg['weight']) / 5
             suggested_shares = int(alloc_per_grid // data['grid_buy']) if data['grid_buy'] > 0 else 0
             
+# === AI 接入點 (傳入網格專屬數據) ===
+            from ai_expert import get_ai_point
+            grid_ai_data = {
+                "price": data['price'],
+                "trend": data['trend'],
+                "rsi": round(data['rsi'], 1),
+                "grid_buy": round(data['grid_buy'], 2)
+            }
+            ai = get_ai_point(target_name=cfg['name'], strategy_type="grid_trading", extra_data=grid_ai_data)
+
             report.append(f"## {cfg['name']} 📍")
             report.append(f"💵 **目前現價**： `{data['price']:.2f}`")
             report.append(f"🔍 **趨勢矩陣**： {data['trend']}")
             report.append(f"📈 **RSI 指標**： `{data['rsi']:.1f}`")
-            report.append(f"🛡️ **補倉預計**： `{data['grid_buy']:.2f}`")
-            report.append(f"⚡ **下單指令**： `買入 {suggested_shares} 股`")
-            report.append("-" * 20)
+            report.append(f"🛡️ **補倉預計**： `{data['grid_buy']:.2f}` (約 `{suggested_shares}` 股)")
+            report.append(f"🤖 **AI 建議**： `{ai.get('decision')}` - {ai.get('reason')}") # 嵌入 AI 理由
+            report.append("---")
             
         except Exception as e:
             logging.error(f"網格執行錯誤 {symbol}: {e}")
