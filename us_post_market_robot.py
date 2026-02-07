@@ -33,13 +33,17 @@ def compute_indicators(df):
     last_ma20 = ma20.iloc[-1]
     last_ma60 = ma60.iloc[-1]
     
-    # 趨勢判斷
-    if last_price > last_ma20 > last_ma60: trend = "🟢強勢多頭"
-    elif last_price < last_ma20 < last_ma60: trend = "🔴強勢空頭"
-    elif last_price > last_ma60: trend = "🟡多頭回檔"
-    else: trend = "🟡空頭反彈"
+    # 趨勢判斷與燈號更換：多頭紅色/空頭綠色/盤整黃色
+    if last_price > last_ma20 > last_ma60: 
+        trend = "🔴 強勢多頭"
+    elif last_price < last_ma20 < last_ma60: 
+        trend = "🟢 強勢空頭"
+    elif last_price > last_ma60: 
+        trend = "🟡 多頭回檔"
+    else: 
+        trend = "🟡 空頭反彈"
     
-    # 動能與機率 (模擬機率算法)
+    # 動能與機率
     up_score = 66 if last_rsi < 40 else 33 if last_rsi > 60 else 50
     down_score = 100 - up_score
     prob = 100 - last_rsi # 簡單逆向機率邏輯
@@ -54,16 +58,14 @@ def compute_indicators(df):
     }
 
 def generate_us_dashboard(dfs):
-    """繪製如圖 1000012027 的多維度儀表板"""
+    """繪製多維度儀表板"""
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
     for symbol, df in dfs.items():
         name = TARGETS_MAP[symbol]
-        # 標準化價格
         norm_close = df['Close'] / df['Close'].iloc[0] * 100
         ax1.plot(df.index, norm_close, label=name)
         
-        # RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -74,7 +76,6 @@ def generate_us_dashboard(dfs):
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # MACD 動能柱 (以標普500為例)
     gspc_close = dfs["^GSPC"]['Close']
     exp1 = gspc_close.ewm(span=12, adjust=False).mean()
     exp2 = gspc_close.ewm(span=26, adjust=False).mean()
@@ -99,7 +100,7 @@ def generate_us_dashboard(dfs):
 def run_us_ai():
     logging.info("🚀 啟動美股盤後分析任務...")
     dfs = {}
-    trade_date = "" # 用於記錄數據中真正的交易日
+    trade_date = "" 
     
     for s in TARGETS:
         df = yf.download(s, period="3mo", interval="1d", progress=False)
@@ -107,18 +108,16 @@ def run_us_ai():
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             dfs[s] = df
-            # 修正日期：以抓取的數據最後一筆 index 作為報告日期
             if not trade_date:
                 trade_date = df.index[-1].strftime("%Y-%m-%d")
             
     if not dfs: return "❌ 數據抓取失敗", None
 
-    # 台灣目前時間
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 修正：在符號與文字間補空格，確保 Discord 觸發大字體渲染
+    # 修正重點：標題行首不放 Emoji，確保字體放大
     report = [
-        f"# 🦅 美股盤後快報",
+        f"# 美股盤後快報 🦅",
         f"### 📅 交易日期： `{trade_date}`", 
         "========================"
     ]
@@ -133,15 +132,15 @@ def run_us_ai():
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
-        # 修正：標題符號後補空格，數據內容使用粗體與大括號高亮
-        report.append(f"## 📊 【{name}】")
-        report.append(f"💵 **最新收盤**： `# {last_close:,.2f} #` ({pct:+.2f}%)")
+        # 修正重點：## 之後直接接文字。Emoji 移到標籤內。
+        report.append(f"## {name} 📊")
+        report.append(f"💵 **最新收盤**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
         report.append(f"🔍 **趨勢狀態**： {info['trend']}")
         report.append(f"📈 **RSI 指標**： `{info['rsi']:.1f}`")
         report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
         report.append("------------------------")
         
-    report.append("# 🤖 AI 狀態：觀望中")
+    report.append("# AI 決策中心：觀望中 🤖")
     report.append(f"發送時間：`{tw_now}`")
     
     img_buf = generate_us_dashboard(dfs)
