@@ -2,13 +2,35 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import io
+import os
 from datetime import datetime, timezone, timedelta
 import logging
 
 # 強制 Agg 後端
 import matplotlib
 matplotlib.use('Agg')
+
+# =====================
+# 🛠️ 終極中文解決方案 (讀取本地字體檔)
+# =====================
+def setup_chinese_font():
+    # 確保 NotoSansTC-Regular.ttf 已經上傳到 GitHub 根目錄
+    font_filename = "NotoSansTC-Regular.ttf"
+    font_path = os.path.join(os.getcwd(), font_filename)
+    
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        font_name = fm.FontProperties(fname=font_path).get_name()
+        plt.rcParams['font.family'] = font_name
+        plt.rcParams['axes.unicode_minus'] = False 
+        logging.info(f"✅ 網格模組：成功載入字體 {font_name}")
+    else:
+        logging.error(f"❌ 網格模組：找不到字體檔 {font_filename}")
+
+# 初始化字體設定
+setup_chinese_font()
 
 # ================= 實驗參數 =================
 TEST_CAPITAL = 10000  # 一萬元實驗資金
@@ -59,27 +81,25 @@ def compute_advanced_grid(df):
     return {"price": price, "rsi": rsi, "trend": trend, "grid_buy": grid_buy}
 
 def generate_grid_chart(dfs):
-    """繪製網格動態分析圖 (漢化版)"""
-    # 1. 解決中文亂碼關鍵設定
-    plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Microsoft JhengHei', 'PingFang TC', 'Arial Unicode MS', 'DejaVu Sans', 'sans-serif']
-    plt.rcParams['axes.unicode_minus'] = False 
-    
+    """繪製網格動態分析圖 (本地字體版)"""
+    # 畫布設定
     fig = plt.figure(figsize=(12, 12))
     
     for i, (symbol, df) in enumerate(dfs.items()):
         ax = plt.subplot(len(dfs), 1, i+1)
         name = TARGETS[symbol]['name']
-        plot_df = df.tail(60) # 顯示最近 60 天
+        plot_df = df.tail(60) # 顯示最近 60 天細節
         
         ma20 = plot_df['Close'].rolling(20).mean()
         std20 = plot_df['Close'].rolling(20).std()
         
-        # 繪製布林通道與價格
+        # 繪製價格與布林通道
         ax.plot(plot_df.index, plot_df['Close'], label='收盤價', lw=2.5, color='#1f77b4')
         ax.fill_between(plot_df.index, ma20-2*std20, ma20+2*std20, color='gray', alpha=0.1, label='布林通道')
         ax.plot(plot_df.index, ma20, color='orange', linestyle='--', alpha=0.8, label='月線 (MA20)')
         
-        ax.set_title(f"📊 {name} 趨勢掃描", fontsize=14, fontweight='bold')
+        # 中文標題與標籤
+        ax.set_title(f"📊 {name} 趨勢掃描", fontsize=15, fontweight='bold', pad=10)
         ax.legend(loc='upper left', fontsize=10)
         ax.grid(True, alpha=0.3, linestyle=':')
 
@@ -94,7 +114,7 @@ def run_grid():
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     
-    # 標準化大標題格式
+    # 大標題報告格式
     report = [
         f"# 🦅 AI 萬元網格實驗報告",
         f"### 📅 報告日期： `{now:%Y-%m-%d %H:%M}`",
@@ -105,6 +125,7 @@ def run_grid():
     dfs_all = {}
     for symbol, cfg in TARGETS.items():
         try:
+            # 修改點：抓取一年數據以符合判斷邏輯 [cite: 2026-02-02]
             df = yf.download(symbol, period="1y", interval="1d", progress=False)
             if df.empty: continue
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -112,6 +133,7 @@ def run_grid():
             data = compute_advanced_grid(df)
             dfs_all[symbol] = df
             
+            # 計算每格建議股數
             alloc_per_grid = (TEST_CAPITAL * cfg['weight']) / 5
             suggested_shares = int(alloc_per_grid // data['grid_buy']) if data['grid_buy'] > 0 else 0
             
@@ -129,5 +151,4 @@ def run_grid():
     report.append(f"# AI 狀態：監控中 🤖")
     
     img_buf = generate_grid_chart(dfs_all)
-    # 使用 .strip() 確保訊息乾淨，觸發 Discord 大標題
     return "\n".join(report).strip(), img_buf
