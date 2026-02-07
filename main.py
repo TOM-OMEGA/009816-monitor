@@ -92,15 +92,21 @@ def background_inspection():
 
     # 3. 執行美股監控
     try:
+        # 【關鍵修正 A】發送一個獨立的物理分隔線，強迫 Discord 結算上一個訊息氣泡
+        dc_log("-------------------------------------------") 
+        
+        # 【關鍵修正 B】拉長等待時間至 8 秒，確保伺服器將其判定為新事件
+        time.sleep(8) 
+        
         result3 = run_us_ai()
         if isinstance(result3, tuple) and len(result3) == 2:
             msg, img = result3
+            # 這裡的 msg 第一行必須是 # 標題
             dc_log(msg, file_buf=img, filename="us_market.png")
         else:
             dc_log(result3)
     except Exception as e:
         dc_log(f"⚠️ **美股模組異常**: `{str(e)}`")
-
     time.sleep(2)
     duration = time.time() - start_time
     dc_log(f"✅ **巡檢完成**\n總耗時: `{duration:.1f} 秒`\n系統狀態: 🟢 正常運行中")
