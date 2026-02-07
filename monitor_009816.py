@@ -70,13 +70,25 @@ def run_taiwan_stock():
         action = "🟢 強勢佈局" if score >= 75 else "🟡 定期定額"
 
         # =====================
-        # 📊 繪圖邏輯 (移除標題 Emoji 以避免亂碼)
+        # 🧠 [新增] AI 接入點 - 解決 'ai' is not defined 錯誤
+        # =====================
+        from ai_expert import get_ai_point
+        ai_data = {
+            "price": price,
+            "projected_1y": round(projected_1y, 2),
+            "score": score,
+            "dist": round(dist_from_launch, 2)
+        }
+        # 呼叫你寫好的 ai_expert 並指定為存股巡檢模式
+        ai = get_ai_point(target_name=name, strategy_type="stock_audit", extra_data=ai_data)
+
+        # =====================
+        # 📊 繪圖邏輯
         # =====================
         plt.figure(figsize=(10, 6))
         plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', linewidth=2, label='每日收盤價')
         plt.axhline(y=10.0, color='#d62728', linestyle='--', alpha=0.6, label='發行價 (10.0)')
         
-        # 修改點：移除 📈 符號，確保文字渲染完全正確
         plt.title(f"{name} (009816) 策略趨勢分析", fontsize=16, fontweight='bold', pad=15)
         plt.xlabel("交易日期", fontsize=12)
         plt.ylabel("價格 (TWD)", fontsize=12)
@@ -87,9 +99,9 @@ def run_taiwan_stock():
         plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
         plt.close()
-
+        
         # =====================
-        # 📖 報告組裝 (末尾加入圖表生成提示)
+        # 📖 報告組裝 (保留原始數據欄位，接入 AI 動態內容)
         # =====================
         today = datetime.now(timezone(timedelta(hours=8)))
         report = [
@@ -103,14 +115,14 @@ def run_taiwan_stock():
             f"📊 **目前位階**： `{((price-low_all)/(high_all-low_all if high_all!=low_all else 1)):.1%}`",
             "---",
             f"## 🤖 AI 經理人評估", 
-            f"💡 **決策**： `{ai.get('decision')}` (信心 {ai.get('confidence')}%)",
-            f"📝 **分析**： {ai.get('reason')}",
+            f"💡 **決策**： `{ai.get('decision', '分析中')}` (信心 {ai.get('confidence', 0)}%)",
+            f"📝 **分析**： {ai.get('reason', '正在產出分析報告...')}",
             "---",
             f"## 🧠 數據分析",
             f"⚖️ **系統評分**： `{score} / 100`",
             f"🎯 **行動建議**： **{action}**",
             "---",
-            f"# {ai.get('status', 'AI 運算中...')}", # <--- 這裡改由 AI 判斷
+            f"# {ai.get('status', 'AI 狀態：複利計算中 🤖')}", # <--- 由 AI 決定狀態文字
             "---",
             f"📈 **{name} 策略趨勢圖已生成，請參閱下方附件**"
         ]
