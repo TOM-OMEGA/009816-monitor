@@ -26,12 +26,12 @@ def compute_indicators(df):
     ma20 = close.rolling(20).mean()
     ma60 = close.rolling(60).mean()
     
-    last_price = close.iloc[-1]
-    last_rsi = rsi.iloc[-1]
-    last_ma20 = ma20.iloc[-1]
-    last_ma60 = ma60.iloc[-1]
+    last_price = float(close.iloc[-1])
+    last_rsi = float(rsi.iloc[-1])
+    last_ma20 = float(ma20.iloc[-1])
+    last_ma60 = float(ma60.iloc[-1])
     
-    # 趨勢燈號校正：多頭紅色(🔴) / 空頭綠色(🟢) / 盤整黃色(🟡)
+    # 趨勢燈號校正
     if last_price > last_ma20 > last_ma60: 
         trend = "🔴 強勢多頭"
     elif last_price < last_ma20 < last_ma60: 
@@ -49,7 +49,7 @@ def compute_indicators(df):
     }
 
 def generate_us_dashboard(dfs):
-    """繪製美股多維度決策儀表板"""
+    """繪製美股多維度決策儀表板 (全中文化)"""
     # 設置中文字體
     plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft JhengHei', 'DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
@@ -59,19 +59,20 @@ def generate_us_dashboard(dfs):
     for symbol, df in dfs.items():
         name = TARGETS_MAP[symbol]
         norm_close = df['Close'] / df['Close'].iloc[0] * 100
-        ax1.plot(df.index, norm_close, label=name)
+        ax1.plot(df.index, norm_close, label=name, linewidth=2)
         
+        # 計算 RSI 用於圖表
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rsi = 100 - (100 / (1 + (gain / loss.replace(0, 0.001))))
-        ax3.plot(df.index, rsi, label=f"{name} RSI", linestyle='--')
+        ax3.plot(df.index, rsi, label=f"{name} RSI", alpha=0.7)
 
-    ax1.set_title("市場指數相對表現 (Base 100)", fontsize=14)
-    ax1.legend()
+    ax1.set_title("市場指數相對表現 (基準100)", fontsize=16)
+    ax1.legend(loc='upper left')
     ax1.grid(True, alpha=0.3)
     
-    # S&P 500 MACD
+    # S&P 500 MACD 柱狀圖
     gspc_close = dfs["^GSPC"]['Close']
     exp1 = gspc_close.ewm(span=12, adjust=False).mean()
     exp2 = gspc_close.ewm(span=26, adjust=False).mean()
@@ -80,15 +81,19 @@ def generate_us_dashboard(dfs):
     hist = macd - signal
     colors = ['#ff4d4d' if h > 0 else '#2ecc71' for h in hist]
     ax2.bar(dfs["^GSPC"].index, hist, color=colors, alpha=0.7)
-    ax2.set_title("標普 500 動能分析 (MACD)")
+    ax2.set_title("標普 500 市場動能 (MACD 柱狀圖)", fontsize=14)
+    ax2.grid(True, alpha=0.2)
     
-    ax3.axhline(70, color='r', linestyle=':', alpha=0.5)
-    ax3.axhline(30, color='g', linestyle=':', alpha=0.5)
-    ax3.set_title("RSI 相對強弱熱度")
+    # RSI 區域
+    ax3.axhline(70, color='red', linestyle='--', alpha=0.5)
+    ax3.axhline(30, color='green', linestyle='--', alpha=0.5)
+    ax3.set_ylim(0, 100)
+    ax3.set_title("RSI 相對強弱指標 (超買/超賣區間)", fontsize=14)
+    ax3.grid(True, alpha=0.2)
     
     plt.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.savefig(buf, format='png', dpi=150)
     buf.seek(0)
     plt.close()
     return buf
@@ -99,24 +104,27 @@ def run_us_ai():
     trade_date = "" 
     
     for s in TARGETS:
-        df = yf.download(s, period="3mo", interval="1d", progress=False)
-        if not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            dfs[s] = df
-            if not trade_date:
-                trade_date = df.index[-1].strftime("%Y-%m-%d")
+        try:
+            df = yf.download(s, period="3mo", interval="1d", progress=False)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                dfs[s] = df
+                if not trade_date:
+                    trade_date = df.index[-1].strftime("%Y-%m-%d")
+        except Exception as e:
+            logging.error(f"抓取 {s} 失敗: {e}")
             
     if not dfs: return "❌ 數據抓取失敗", None
 
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 【關鍵：第一行必須直接是 #，前方絕不能有 \n 或任何字元】
-    report = [
-        f"# 美股盤後快報 🦅",
-        f"### 📅 交易日期： `{trade_date}`", 
-        "========================"
-    ]
+    # 建立報告列表
+    report = []
+    # 第一行強制確保為大標題，移除任何可能的領頭換行
+    report.append("# 美股盤後快報 🦅")
+    report.append(f"### 📅 交易日期： `{trade_date}`")
+    report.append("---")
     
     for symbol in TARGETS:
         if symbol not in dfs: continue
@@ -128,17 +136,19 @@ def run_us_ai():
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
-        # 標題 ## 後方直接接名稱，Emoji 放後面
         report.append(f"## {name} 📊")
-        report.append(f"💵 **最新收盤**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
-        report.append(f"🔍 **趨勢狀態**： {info['trend']}")
-        report.append(f"📈 **RSI 指標**： `{info['rsi']:.1f}`")
+        report.append(f"💵 **收盤價**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
+        report.append(f"🔍 **趨勢**： {info['trend']}")
+        report.append(f"📈 **RSI**： `{info['rsi']:.1f}`")
         report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
-        report.append("-" * 20)
+        report.append("-" * 15)
         
     report.append(f"# AI 狀態：觀望中 🤖")
-    report.append(f"發送時間：`{tw_now}`")
+    report.append(f"發送時間：`{tw_now} (UTC+8)`")
+    
+    # 組合字串，並使用 strip() 確保頭尾絕對沒有換行或空格
+    final_msg = "\n".join(report).strip()
     
     img_buf = generate_us_dashboard(dfs)
     
-    return "\n".join(report), img_buf
+    return final_msg, img_buf
