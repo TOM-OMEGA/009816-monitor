@@ -82,7 +82,7 @@ def compute_advanced_grid(df):
     return {"price": price, "rsi": rsi, "trend": trend, "grid_buy": grid_buy}
 
 def generate_grid_chart(dfs):
-    """繪製網格動態分析圖 (修正符號與字體版)"""
+    """繪製網格動態分析圖 (專業文字版 - 移除 Emoji)"""
     fig = plt.figure(figsize=(12, 12))
     
     for i, (symbol, df) in enumerate(dfs.items()):
@@ -98,8 +98,8 @@ def generate_grid_chart(dfs):
         ax.fill_between(plot_df.index, ma20-2*std20, ma20+2*std20, color='gray', alpha=0.1, label='布林通道')
         ax.plot(plot_df.index, ma20, color='orange', linestyle='--', alpha=0.8, label='月線 (MA20)')
         
-        # 修正：確保 Emoji 與 中文標題能同時正確渲染
-        ax.set_title(f"📊 {name} 趨勢掃描", fontsize=15, fontweight='bold', pad=10)
+        # 修改點：移除圖表標題內的 📊 符號，確保 Render 環境文字渲染完全正確
+        ax.set_title(f"{name} 趨勢掃描", fontsize=15, fontweight='bold', pad=10)
         ax.legend(loc='upper left', fontsize=10)
         ax.grid(True, alpha=0.3, linestyle=':')
 
@@ -147,6 +147,9 @@ def run_grid():
             logging.error(f"網格執行錯誤 {symbol}: {e}")
 
     report.append(f"# AI 狀態：監控中 🤖")
+    report.append("---")
+    # 修改點：在報告末尾加入 Discord 專用圖表生成提示
+    report.append(f"📊 **萬元網格實驗動態分析圖已生成，請參閱下方附件**")
     
     img_buf = generate_grid_chart(dfs_all)
     return "\n".join(report).strip(), img_buf
