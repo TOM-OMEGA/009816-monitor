@@ -2,7 +2,9 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import io
+import os
 from datetime import datetime, timezone, timedelta
 import logging
 
@@ -10,17 +12,37 @@ import logging
 import matplotlib
 matplotlib.use('Agg')
 
+# =====================
+# 🛠️ 中文字體配置 (讀取 GitHub 本地檔案)
+# =====================
+def setup_chinese_font():
+    # 確保名稱與你上傳的檔案一模一樣
+    font_filename = "NotoSansTC-Regular.ttf"
+    font_path = os.path.join(os.getcwd(), font_filename)
+    
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        font_name = fm.FontProperties(fname=font_path).get_name()
+        plt.rcParams['font.family'] = font_name
+        plt.rcParams['axes.unicode_minus'] = False 
+        logging.info(f"✅ 成功啟用本地字體: {font_name}")
+    else:
+        logging.error(f"❌ 找不到字體檔: {font_filename}，請確認已上傳至 GitHub 根目錄")
+
+# 初始化字體
+setup_chinese_font()
+
 def run_taiwan_stock():
     """
-    009816 凱基台灣 TOP 50 巡檢模組 - 2026 大標題 & 中文圖表版
+    009816 凱基台灣 TOP 50 巡檢模組 - 終極中文版
     """
     symbol = "009816.TW"
     name = "凱基台灣 TOP 50"
 
     try:
-        # 1. 抓取數據
+        # 1. 抓取數據 (往前看一年以利判斷)
         ticker = yf.Ticker(symbol)
-        df = ticker.history(period="1y", timeout=15) # 往前看一年數據
+        df = ticker.history(period="1y", timeout=15)
 
         if df.empty or len(df) < 1:
             return f"# ❌ {name}\n數據尚未入庫，請待收盤後重試。", None
@@ -31,15 +53,13 @@ def run_taiwan_stock():
         close = df["Close"]
         price = float(close.iloc[-1])
         
-        # =====================
-        # 數據分析與 2027 投影 [cite: 2026-02-02]
-        # =====================
+        # 數據分析
         high_all = close.max()
         low_all = min(close.min(), 10.00)
         dist_from_launch = (price / 10.0 - 1) * 100
         days_active = len(df)
         
-        # 預測一年後 (2027) 展望邏輯：基於年化波動與當前動能
+        # 2027 展望投影 [cite: 2026-02-02]
         daily_ret = (price / 10.0) ** (1 / max(days_active, 1)) - 1
         projected_1y = price * ((1 + daily_ret) ** 252)
 
@@ -49,23 +69,19 @@ def run_taiwan_stock():
         action = "🟢 強勢佈局" if score >= 75 else "🟡 定期定額"
 
         # =====================
-        # 📊 繪圖邏輯 (解決中文字體)
+        # 📊 繪圖邏輯 (使用本地字體)
         # =====================
-        # 設置多重字體回退，確保中文化成功
-        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Microsoft JhengHei', 'PingFang TC', 'Arial Unicode MS', 'DejaVu Sans', 'sans-serif']
-        plt.rcParams['axes.unicode_minus'] = False 
-
         plt.figure(figsize=(10, 6))
         plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', linewidth=2, label='每日收盤價')
         plt.axhline(y=10.0, color='#d62728', linestyle='--', alpha=0.6, label='發行價 (10.0)')
         
+        # 這裡的標題會完美顯示中文
         plt.title(f"📈 {name} (009816) 策略趨勢分析", fontsize=16, fontweight='bold', pad=15)
         plt.xlabel("交易日期", fontsize=12)
         plt.ylabel("價格 (TWD)", fontsize=12)
         plt.legend(loc='best')
         plt.grid(True, linestyle=':', alpha=0.5)
 
-        # 將圖表存入緩衝區
         buf = io.BytesIO()
         plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
@@ -93,7 +109,6 @@ def run_taiwan_stock():
             f"💡 **提醒**：複利效果穩定，已納入 2027 投影計畫。"
         ]
 
-        # 使用 strip() 確保發送訊息乾淨，觸發 Discord 大標題
         return "\n".join(report).strip(), buf
 
     except Exception as e:
