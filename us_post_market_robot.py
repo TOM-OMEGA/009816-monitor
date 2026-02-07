@@ -99,38 +99,49 @@ def generate_us_dashboard(dfs):
 def run_us_ai():
     logging.info("🚀 啟動美股盤後分析任務...")
     dfs = {}
+    trade_date = "" # 用於記錄數據中真正的交易日
+    
     for s in TARGETS:
         df = yf.download(s, period="3mo", interval="1d", progress=False)
         if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             dfs[s] = df
+            # 修正日期：以抓取的數據最後一筆 index 作為報告日期
+            if not trade_date:
+                trade_date = df.index[-1].strftime("%Y-%m-%d")
             
     if not dfs: return "❌ 數據抓取失敗", None
 
-    us_tz = timezone(timedelta(hours=-5))
-    report_date = datetime.now(us_tz).strftime("%Y-%m-%d")
+    # 台灣目前時間
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    report = [f"🦅 美股盤後快報 [{report_date}]", "========================"]
+    # 修改：使用 # 與 ### 加大標題字體，日期改為實際交易日
+    report = [
+        f"# 🦅 美股盤後快報",
+        f"### 📅 交易日期: `{trade_date}`", 
+        "========================"
+    ]
     
     for symbol in TARGETS:
         if symbol not in dfs: continue
         df = dfs[symbol]
-        last_close = df['Close'].iloc[-1]
-        prev_close = df['Close'].iloc[-2]
+        last_close = float(df['Close'].iloc[-1])
+        prev_close = float(df['Close'].iloc[-2])
         pct = (last_close / prev_close - 1) * 100
         
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
-        report.append(f"【{name}】 {last_close:,.2f} ({pct:+.2f}%)")
-        report.append(f"趨勢: {info['trend']} | RSI: {info['rsi']:.1f}")
-        report.append(f"短線動能: 📈反彈{info['up']}分 vs 📉下跌{info['down']}分")
-        report.append(f"機率試算: 反彈機率{info['prob']:.0f}%")
+        # 修改：增加 ## 加大標題字體，數值加粗
+        report.append(f"## 【{name}】")
+        report.append(f"💵 **收盤**: `{last_close:,.2f}` ({pct:+.2f}%)")
+        report.append(f"🔍 趨勢: {info['trend']} | RSI: {info['rsi']:.1f}")
+        report.append(f"📊 短線動能: 📈反彈{info['up']}分 vs 📉下跌{info['down']}分")
+        report.append(f"🎯 機率試算: 反彈機率{info['prob']:.0f}%")
         report.append("------------------------")
         
-    report.append("🤖 AI 決策中心：觀望 (信心度 0%)")
+    report.append("🤖 **AI 決策中心**：觀望 (信心度 0%)")
     report.append(f"\n(台灣時間 {tw_now} 發送)")
     
     img_buf = generate_us_dashboard(dfs)
