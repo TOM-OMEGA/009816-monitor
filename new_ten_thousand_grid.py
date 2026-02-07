@@ -108,11 +108,11 @@ def run_grid():
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     
-    # 標題加重，放大字體
+    # 在 # 與 Emoji 間補空格，確保 Discord 觸發大字體
     report = [
         f"# 🦅 AI 萬元網格實驗報告",
-        f"### 📅 報告時間: `{now:%Y-%m-%d %H:%M}`",
-        f"**💰 實驗總金:** `{TEST_CAPITAL:,} TWD`",
+        f"### 📅 報告日期： `{now:%Y-%m-%d %H:%M}`",
+        f"### 💰 實驗總金： `{TEST_CAPITAL:,} TWD`",
         "=============================="
     ]
     
@@ -126,24 +126,22 @@ def run_grid():
             data = compute_advanced_grid(df)
             dfs_all[symbol] = df
             
-            # 股數計算：該標的分派金額 / 5格 / 預計買入價 (無條件捨去取整數)
-            alloc_total = TEST_CAPITAL * cfg['weight']
-            per_grid_cash = alloc_total / 5
-            suggested_shares = int(per_grid_cash // data['grid_buy']) if data['grid_buy'] > 0 else 0
+            alloc_per_grid = (TEST_CAPITAL * cfg['weight']) / 5
+            suggested_shares = int(alloc_per_grid // data['grid_buy']) if data['grid_buy'] > 0 else 0
             
-            # 趨勢與點位通知
-            notify_tag = "⚠️ **🔔 [點位接近通知]**" if data['price'] <= (data['grid_buy'] * 1.005) else ""
+            notify = " ⚠️ **🔔 [點位接近]**" if data['price'] <= (data['grid_buy'] * 1.005) else ""
             
+            # 使用 ## 加上空格來強制放大
             report.append(f"## 📍 {cfg['name']}")
-            report.append(f"💰 **目前現價**: `{data['price']:.2f}`")
-            report.append(f"📈 **趨勢矩陣**: {data['trend']}")
-            report.append(f"🎯 **預計補倉**: `{data['grid_buy']:.2f}` {notify_tag}")
-            report.append(f"📝 **下單指令**: `買入 {suggested_shares} 股`")
+            report.append(f"**目前現價：** `# {data['price']:.2f} #`") # 模擬大字體效果
+            report.append(f"**趨勢矩陣：** {data['trend']}")
+            report.append(f"**預計補倉：** `{data['grid_buy']:.2f}`{notify}")
+            report.append(f"**下單指令：** `買入 {suggested_shares} 股`")
             report.append("-" * 25)
             
         except Exception as e:
             report.append(f"❌ {symbol} 異常: {str(e)[:50]}")
 
-    report.append(f"🤖 **經理人決策**: 六維度矩陣掃描完成，監測中。")
+    report.append(f"🤖 **經理人決策：六維度掃描完成**")
     img_buf = generate_grid_chart(dfs_all)
     return "\n".join(report), img_buf
