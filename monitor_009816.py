@@ -6,26 +6,24 @@ import io
 from datetime import datetime, timezone, timedelta
 import logging
 
-# 強制設定繪圖風格，避免部分環境報錯
-try:
-    plt.style.use('seaborn-v0_8-darkgrid')
-except:
-    plt.style.use('ggplot')
+# 強制 Agg 後端
+import matplotlib
+matplotlib.use('Agg')
 
 def run_taiwan_stock():
     """
-    009816 (凱基台灣 TOP 50) 帶圖表巡檢模組 - 2026 英文優化版
+    009816 凱基台灣 TOP 50 巡檢模組 - 2026 大標題 & 中文圖表版
     """
     symbol = "009816.TW"
-    name = "凱基台灣 TOP 50 (009816)"
+    name = "凱基台灣 TOP 50"
 
     try:
         # 1. 抓取數據
         ticker = yf.Ticker(symbol)
-        df = ticker.history(period="max", timeout=15)
+        df = ticker.history(period="1y", timeout=15) # 往前看一年數據
 
         if df.empty or len(df) < 1:
-            return f"❌ {name}: 市場數據尚未入庫 (2/3掛牌)，請待收盤後重試。", None
+            return f"# ❌ {name}\n數據尚未入庫，請待收盤後重試。", None
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -34,67 +32,69 @@ def run_taiwan_stock():
         price = float(close.iloc[-1])
         
         # =====================
-        # 數據分析與建模 (保持精確邏輯)
+        # 數據分析與 2027 投影 [cite: 2026-02-02]
         # =====================
         high_all = close.max()
         low_all = min(close.min(), 10.00)
         dist_from_launch = (price / 10.0 - 1) * 100
         days_active = len(df)
         
-        # 防止分母為零
+        # 預測一年後 (2027) 展望邏輯：基於年化波動與當前動能
         daily_ret = (price / 10.0) ** (1 / max(days_active, 1)) - 1
         projected_1y = price * ((1 + daily_ret) ** 252)
 
-        ma_short = close.rolling(min(3, len(df))).mean().iloc[-1]
-        
         score = 65 
         if price <= 10.05: score += 10
         if dist_from_launch < 2.0: score += 5
-        action = "🟢 市值型首選（可長線佈局）" if score >= 75 else "🟡 定期定額（複利累積中）"
+        action = "🟢 強勢佈局" if score >= 75 else "🟡 定期定額"
 
         # =====================
-        # 📊 繪圖邏輯 (修正中文字體問題)
+        # 📊 繪圖邏輯 (解決中文字體)
         # =====================
-        plt.figure(figsize=(10, 5))
-        plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', label='Close Price')
-        plt.axhline(y=10.0, color='#d62728', linestyle='--', alpha=0.7, label='Issue Price (10.0)')
+        # 設置多重字體回退，確保中文化成功
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Microsoft JhengHei', 'PingFang TC', 'Arial Unicode MS', 'DejaVu Sans', 'sans-serif']
+        plt.rcParams['axes.unicode_minus'] = False 
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', linewidth=2, label='每日收盤價')
+        plt.axhline(y=10.0, color='#d62728', linestyle='--', alpha=0.6, label='發行價 (10.0)')
         
-        # 🟢 修正點：標題與標籤全部使用英文，防止 Render 環境顯示亂碼
-        plt.title(f"ETF 009816.TW - Strategic Trend Analysis", fontsize=14)
-        plt.xlabel("Trading Date")
-        plt.ylabel("Price (TWD)")
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.title(f"📈 {name} (009816) 策略趨勢分析", fontsize=16, fontweight='bold', pad=15)
+        plt.xlabel("交易日期", fontsize=12)
+        plt.ylabel("價格 (TWD)", fontsize=12)
+        plt.legend(loc='best')
+        plt.grid(True, linestyle=':', alpha=0.5)
 
         # 將圖表存入緩衝區
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
         plt.close()
 
         # =====================
-        # 報告組裝 (標題字體加大)
+        # 📖 報告組裝 (大標題格式)
         # =====================
         today = datetime.now(timezone(timedelta(hours=8)))
         report = [
-            f"# 🦅 經理人 AI 存股決策 ({today:%Y-%m-%d})",
-            f"------------------------------------",
-            f"📌 **標的評估**: {name}",
-            f"💰 現價: `{price:.2f}` (發行價: 10.00)",
-            f"🚀 **2027 預測展望**: `{projected_1y:.2f}`",
-            f"",
-            f"📊 **掛牌動向**:",
-            f"   • 上市日期: `2026-02-03`",
-            f"   • 累計漲跌: `{dist_from_launch:+.2f}%`",
-            f"   • 目前位階: `{((price-low_all)/(high_all-low_all if high_all!=low_all else 1)):.1%}`",
-            f"",
-            f"🧠 **決策分數: {score} / 100**",
-            f"📊 **行動建議: {action}**",
-            f"------------------------------------",
-            f"💡 **經理人專業提醒**: 複利效果優於 0050，已落實 2027 預測指令。"
+            f"# 🦅 經理人 AI 存股決策",
+            f"### 📅 巡檢日期： `{today:%Y-%m-%d %H:%M}`",
+            "---",
+            f"## {name} (009816) 📌",
+            f"💵 **目前現價**： `{price:.2f}` (發行價: 10.00)",
+            f"🚀 **2027 展望**： `{projected_1y:.2f}`",
+            f"📈 **累計漲跌**： `{dist_from_launch:+.2f}%`",
+            f"📊 **目前位階**： `{((price-low_all)/(high_all-low_all if high_all!=low_all else 1)):.1%}`",
+            "---",
+            f"## 🧠 決策分析",
+            f"⚖️ **系統評分**： `{score} / 100`",
+            f"🎯 **行動建議**： **{action}**",
+            "---",
+            f"# AI 狀態：複利計算中 🤖",
+            f"💡 **提醒**：複利效果穩定，已納入 2027 投影計畫。"
         ]
 
-        return "\n".join(report), buf
+        # 使用 strip() 確保發送訊息乾淨，觸發 Discord 大標題
+        return "\n".join(report).strip(), buf
 
     except Exception as e:
         logging.error(f"009816 執行錯誤: {e}")
