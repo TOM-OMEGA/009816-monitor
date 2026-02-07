@@ -59,35 +59,39 @@ def background_inspection():
     start_time = time.time()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    dc_log(f"# 🛰️ **AI 投資監控系統：巡檢啟動**\n時間: `{now_str}`")
+    # 啟動通知
+    dc_log(f"# 🛰️ AI 投資監控系統：巡檢啟動\n時間: `{now_str}`")
+    # 強制等待，確保啟動通知與第一份報告分開
+    time.sleep(3) 
 
     # 1. 執行 009816 監控
     try:
         result1 = run_taiwan_stock()
-        # 判斷是否為 (文字, 圖片) 的元組
         if isinstance(result1, tuple) and len(result1) == 2:
             msg, img = result1
             dc_log(msg, file_buf=img, filename="009816_analysis.png")
         else:
             dc_log(result1)
+        # 【關鍵修正】增加等待時間至 5 秒，徹底切斷 Discord 的訊息合併（Grouping）
+        time.sleep(5) 
     except Exception as e:
         dc_log(f"⚠️ **009816 模組異常**: `{str(e)}`")
 
     # 2. 執行網格監控
     try:
-        time.sleep(2)
         result2 = run_grid()
         if isinstance(result2, tuple) and len(result2) == 2:
             msg, img = result2
             dc_log(msg, file_buf=img, filename="grid_report.png")
         else:
             dc_log(result2)
+        # 【關鍵修正】再次強制冷卻
+        time.sleep(5) 
     except Exception as e:
         dc_log(f"⚠️ **網格模組異常**: `{str(e)}`")
 
     # 3. 執行美股監控
     try:
-        time.sleep(2)
         result3 = run_us_ai()
         if isinstance(result3, tuple) and len(result3) == 2:
             msg, img = result3
@@ -97,6 +101,7 @@ def background_inspection():
     except Exception as e:
         dc_log(f"⚠️ **美股模組異常**: `{str(e)}`")
 
+    time.sleep(2)
     duration = time.time() - start_time
     dc_log(f"✅ **巡檢完成**\n總耗時: `{duration:.1f} 秒`\n系統狀態: 🟢 正常運行中")
 
