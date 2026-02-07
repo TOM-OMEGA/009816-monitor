@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import io
+import os
 from datetime import datetime, timedelta, timezone
 import logging
 
@@ -15,7 +16,7 @@ TARGETS_MAP = {"^GSPC": "標普500", "^DJI": "道瓊工業", "^IXIC": "那斯達
 TARGETS = list(TARGETS_MAP.keys())
 
 def compute_indicators(df):
-    """計算趨勢、RSI與動能分值"""
+    """計算趨勢、RSI與波動預期"""
     close = df['Close']
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -27,52 +28,61 @@ def compute_indicators(df):
     ma60 = close.rolling(60).mean()
     
     last_price = float(close.iloc[-1])
-    last_rsi = float(rsi.iloc[-1])
-    last_ma20 = float(ma20.iloc[-1])
-    last_ma60 = float(ma60.iloc[-1])
     
     # 趨勢燈號校正
-    if last_price > last_ma20 > last_ma60: 
+    if last_price > ma20.iloc[-1] > ma60.iloc[-1]: 
         trend = "🔴 強勢多頭"
-    elif last_price < last_ma20 < last_ma60: 
+    elif last_price < ma20.iloc[-1] < ma60.iloc[-1]: 
         trend = "🟢 強勢空頭"
-    elif last_price > last_ma60: 
+    elif last_price > ma60.iloc[-1]: 
         trend = "🟡 多頭回檔"
     else: 
         trend = "🟡 空頭反彈"
     
+    # 計算波動區間 (預測下週範圍 - 基於前 20 日標準差)
+    returns = np.log(close / close.shift(1))
+    volatility = returns.std() * np.sqrt(5) # 5 個交易日波動
+    range_up = last_price * (1 + volatility)
+    range_down = last_price * (1 - volatility)
+    
     return {
         "price": last_price,
-        "rsi": last_rsi,
+        "rsi": float(rsi.iloc[-1]),
         "trend": trend,
-        "prob": 100 - last_rsi
+        "prob": 100 - float(rsi.iloc[-1]),
+        "range": (range_down, range_up)
     }
 
 def generate_us_dashboard(dfs):
-    """繪製美股多維度決策儀表板 (全中文化)"""
-    # 設置中文字體
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft JhengHei', 'DejaVu Sans']
-    plt.rcParams['axes.unicode_minus'] = False
+    """繪製美股多維度決策儀表板 (修復亂碼 + 高清化)"""
+    
+    # 1. 究極亂碼修復：多重字體回退機制
+    plt.rcParams['font.sans-serif'] = [
+        'Noto Sans CJK TC', 'Microsoft JhengHei', 'PingFang TC', 
+        'Arial Unicode MS', 'DejaVu Sans', 'sans-serif'
+    ]
+    plt.rcParams['axes.unicode_minus'] = False # 關鍵：修復負號方塊
     
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16), gridspec_kw={'height_ratios': [2, 1, 1]})
     
     for symbol, df in dfs.items():
         name = TARGETS_MAP[symbol]
+        # 正規化價格 (基準100)
         norm_close = df['Close'] / df['Close'].iloc[0] * 100
-        ax1.plot(df.index, norm_close, label=name, linewidth=2)
+        ax1.plot(df.index, norm_close, label=name, linewidth=2.5)
         
-        # 計算 RSI 用於圖表
+        # RSI 曲線
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rsi = 100 - (100 / (1 + (gain / loss.replace(0, 0.001))))
-        ax3.plot(df.index, rsi, label=f"{name} RSI", alpha=0.7)
+        ax3.plot(df.index, rsi, label=f"{name}", alpha=0.8)
 
-    ax1.set_title("市場指數相對表現 (基準100)", fontsize=16)
-    ax1.legend(loc='upper left')
-    ax1.grid(True, alpha=0.3)
+    ax1.set_title("📊 市場指數相對表現 (基準 100)", fontsize=18, fontweight='bold', pad=20)
+    ax1.legend(loc='upper left', fontsize=12)
+    ax1.grid(True, linestyle='--', alpha=0.5)
     
-    # S&P 500 MACD 柱狀圖
+    # S&P 500 MACD
     gspc_close = dfs["^GSPC"]['Close']
     exp1 = gspc_close.ewm(span=12, adjust=False).mean()
     exp2 = gspc_close.ewm(span=26, adjust=False).mean()
@@ -80,20 +90,22 @@ def generate_us_dashboard(dfs):
     signal = macd.ewm(span=9, adjust=False).mean()
     hist = macd - signal
     colors = ['#ff4d4d' if h > 0 else '#2ecc71' for h in hist]
-    ax2.bar(dfs["^GSPC"].index, hist, color=colors, alpha=0.7)
-    ax2.set_title("標普 500 市場動能 (MACD 柱狀圖)", fontsize=14)
-    ax2.grid(True, alpha=0.2)
+    ax2.bar(dfs["^GSPC"].index, hist, color=colors, alpha=0.8, width=0.8)
+    ax2.set_title("📈 標普 500 市場動能 (MACD)", fontsize=16)
+    ax2.grid(True, axis='y', alpha=0.3)
     
-    # RSI 區域
-    ax3.axhline(70, color='red', linestyle='--', alpha=0.5)
-    ax3.axhline(30, color='green', linestyle='--', alpha=0.5)
+    # RSI 熱力
+    ax3.axhline(70, color='#ff4d4d', linestyle='--', linewidth=1.5)
+    ax3.axhline(30, color='#2ecc71', linestyle='--', linewidth=1.5)
+    ax3.fill_between(dfs["^GSPC"].index, 70, 100, color='#ff4d4d', alpha=0.05)
+    ax3.fill_between(dfs["^GSPC"].index, 0, 30, color='#2ecc71', alpha=0.05)
+    ax3.set_title("🔥 RSI 強弱熱度掃描", fontsize=16)
     ax3.set_ylim(0, 100)
-    ax3.set_title("RSI 相對強弱指標 (超買/超賣區間)", fontsize=14)
-    ax3.grid(True, alpha=0.2)
     
     plt.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150)
+    # 提高 DPI 到 180，讓手機看大標題更清晰
+    plt.savefig(buf, format='png', dpi=180, bbox_inches='tight')
     buf.seek(0)
     plt.close()
     return buf
@@ -105,7 +117,8 @@ def run_us_ai():
     
     for s in TARGETS:
         try:
-            df = yf.download(s, period="3mo", interval="1d", progress=False)
+            # 往前看三個月以計算精確 MA
+            df = yf.download(s, period="4mo", interval="1d", progress=False)
             if not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
@@ -119,36 +132,41 @@ def run_us_ai():
 
     tw_now = datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
     
-    # 建立報告列表
-    report = []
-    # 第一行強制確保為大標題，移除任何可能的領頭換行
-    report.append("# 美股盤後快報 🦅")
-    report.append(f"### 📅 交易日期： `{trade_date}`")
-    report.append("---")
+    # 構建大標題格式報告
+    report = [
+        "# 美股盤後快報 🦅",
+        f"### 📅 交易日期： `{trade_date}`",
+        "---"
+    ]
     
     for symbol in TARGETS:
         if symbol not in dfs: continue
         df = dfs[symbol]
-        last_close = float(df['Close'].iloc[-1])
-        prev_close = float(df['Close'].iloc[-2])
-        pct = (last_close / prev_close - 1) * 100
-        
         info = compute_indicators(df)
         name = TARGETS_MAP[symbol]
         
+        last_close = info['price']
+        prev_close = float(df['Close'].iloc[-2])
+        pct = (last_close / prev_close - 1) * 100
+        
         report.append(f"## {name} 📊")
-        report.append(f"💵 **收盤價**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
-        report.append(f"🔍 **趨勢**： {info['trend']}")
-        report.append(f"📈 **RSI**： `{info['rsi']:.1f}`")
-        report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
+        report.append(f"💵 **最新收盤**： `{last_close:,.2f}` (**{pct:+.2f}%**)")
+        report.append(f"🔍 **趨勢狀態**： {info['trend']}")
+        report.append(f"📈 **RSI 指標**： `{info['rsi']:.1f}`")
+        
+        # 針對 TSM 增加下週預期區間
+        if symbol == "TSM":
+            low, high = info['range']
+            report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
+            report.append(f"🛡️ **下週預期**： `${low:.1f}` ~ `${high:.1f}`")
+        else:
+            report.append(f"🎯 **反彈機率**： `{info['prob']:.0f}%`")
+            
         report.append("-" * 15)
         
-    report.append(f"# AI 狀態：觀望中 🤖")
+    report.append(f"# AI 狀態：系統運行中 🤖")
     report.append(f"發送時間：`{tw_now} (UTC+8)`")
-    
-    # 組合字串，並使用 strip() 確保頭尾絕對沒有換行或空格
-    final_msg = "\n".join(report).strip()
     
     img_buf = generate_us_dashboard(dfs)
     
-    return final_msg, img_buf
+    return "\n".join(report).strip(), img_buf
