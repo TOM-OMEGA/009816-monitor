@@ -13,9 +13,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 AI_CACHE = {}
 AI_COOLDOWN_MINUTES = 1
 
-def get_ai_point(target_name, strategy_type, extra_data):
+# 🟢 修改點：在參數中加入 debug=False，防止舊程式碼呼叫時報錯
+def get_ai_point(target_name, strategy_type, extra_data, debug=False):
     """
-    通用 AI 判斷函式 (支援三種策略分流) - 強固 JSON 版
+    通用 AI 判斷函式 (支援三種策略分流) - 強固 JSON 版 + 相容性修正
     """
     global AI_CACHE
     now = datetime.now()
@@ -96,7 +97,7 @@ Required fields:
         "contents": [{"parts": [{"text": prompt}]}], 
         "generationConfig": {
             "temperature": 0.2,
-            "response_mime_type": "application/json"  # <--- 關鍵修改：強制 API 回傳 JSON
+            "response_mime_type": "application/json"
         }
     }
 
@@ -154,21 +155,16 @@ def _rescue_json(text, default_status):
         "status": default_status
     }
     
-    # 1. 嘗試抓取 decision
     m_dec = re.search(r'"decision"\s*:\s*"([^"]+)"', text)
     if m_dec: result["decision"] = m_dec.group(1)
     
-    # 2. 嘗試抓取 confidence (數字)
     m_conf = re.search(r'"confidence"\s*:\s*(\d+)', text)
     if m_conf: result["confidence"] = int(m_conf.group(1))
     
-    # 3. 嘗試抓取 reason (最容易出錯的地方)
-    # 使用非貪婪匹配，直到遇到下一個引號結束
     m_reason = re.search(r'"reason"\s*:\s*"([^"]*?)"', text, re.DOTALL)
     if m_reason: 
         result["reason"] = m_reason.group(1)
     else:
-        # 如果失敗，嘗試寬鬆抓取
         clean_text = text.replace('"', '').replace('{', '').replace('}', '')
         if "reason:" in clean_text:
             parts = clean_text.split("reason:")
