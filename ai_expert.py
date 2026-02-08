@@ -1,27 +1,109 @@
-# ai_expert.py - 三階段 AI 決策系統
+# ai_expert.py - 三階段 AI 決策系統（使用可運作的 API 配置）
 import os
 import requests
 import json
-from datetime import datetime
 import time
+import re
 import logging
+from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
+# === 設定 logging ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # === AI 冷卻 / Cache ===
 AI_CACHE = {}
-AI_LAST_CALL = {}
-AI_COOLDOWN_MINUTES = 5
 
 # === 全域變數：儲存美股分析結果 ===
 US_MARKET_SENTIMENT = {
     "analyzed": False,
-    "sentiment": "中性",  # 多頭/空頭/中性
-    "strength": 50,       # 0-100
+    "sentiment": "中性",
+    "strength": 50,
     "tsm_trend": "持平",
     "tech_outlook": "觀望",
-    "next_day_prediction": "震盪"  # 上漲/下跌/震盪
+    "next_day_prediction": "震盪"
 }
+
+def _call_gemini_api(prompt, debug=False):
+    """
+    統一的 Gemini API 呼叫函式（使用已驗證的配置）
+    """
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        logging.error("❌ 未設定 GEMINI_API_KEY")
+        return None
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 800
+        }
+    }
+
+    # 使用已驗證可運作的模型序列
+    models_to_try = [
+        "gemma-3-27b-it",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
+    ]
+
+    for model_name in models_to_try:
+        for attempt in range(2):
+            try:
+                # 使用 v1beta 端點（已驗證）
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                
+                if debug:
+                    logging.info(f"🔄 嘗試使用 {model_name}...")
+
+                res = requests.post(api_url, json=payload, timeout=25)
+
+                if res.status_code == 429:
+                    logging.warning(f"⚠️ 模型 {model_name} 額度耗盡，嘗試下一個...")
+                    break
+
+                if res.status_code != 200:
+                    logging.error(f"❌ {model_name} 錯誤 ({res.status_code})")
+                    break
+
+                data = res.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                
+                # 清理 Markdown 標記
+                text = re.sub(r'```json\n?|\n?```', '', text).strip()
+                
+                # 嘗試解析 JSON
+                try:
+                    result = json.loads(text)
+                    logging.info(f"✅ 成功使用 {model_name} 完成分析")
+                    return result
+                except json.JSONDecodeError:
+                    # 備用解析
+                    result = _rescue_json(text)
+                    if result:
+                        logging.info(f"✅ 成功使用 {model_name} 完成分析（備用解析）")
+                        return result
+
+            except Exception as e:
+                logging.error(f"❌ {model_name} 請求異常: {e}")
+                time.sleep(2)
+
+    return None
+
+def _rescue_json(text):
+    """備用 JSON 解析器"""
+    result = {"decision": "觀望", "confidence": 50, "reason": "解析錯誤"}
+    try:
+        m_dec = re.search(r'"decision"\s*:\s*"([^"]+)"', text)
+        if m_dec: result["decision"] = m_dec.group(1)
+        m_conf = re.search(r'"confidence"\s*:\s*(\d+)', text)
+        if m_conf: result["confidence"] = int(m_conf.group(1))
+        m_reason = re.search(r'"reason"\s*:\s*"([^"]*?)"', text)
+        if m_reason: result["reason"] = m_reason.group(1)
+        return result
+    except:
+        return None
 
 def analyze_us_market(extra_data, debug=False):
     """
@@ -29,13 +111,7 @@ def analyze_us_market(extra_data, debug=False):
     產生市場情緒指標供台股參考
     """
     global US_MARKET_SENTIMENT
-    
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_key:
-        logging.error("❌ 未設定 GEMINI_API_KEY")
-        return {"decision": "ERROR", "confidence": 0, "reason": "未設定 API Key"}
 
-    # 美股專用 Prompt
     prompt = f"""你是專業美股分析師，請分析今日盤後數據並預測台股明日開盤：
 
 美股數據：
@@ -44,108 +120,47 @@ def analyze_us_market(extra_data, debug=False):
 - 台積電ADR: {extra_data.get('tsm', 'N/A')}
 - 技術面: {extra_data.get('tech', 'N/A')}
 
-請分析：
-1. 美股整體情緒（多頭/空頭/中性）
-2. 科技股動能強度（0-100）
-3. 台積電ADR表現（強勢/弱勢/持平）
-4. 台股明日開盤預測（上漲/下跌/震盪）
-5. 投資建議（30字內）
+請分析並輸出 JSON（不要包含 Markdown 標記）：
+{{
+  "sentiment": "多頭/空頭/中性",
+  "strength": 75,
+  "tsm_trend": "強勢/弱勢/持平",
+  "next_day": "上漲/下跌/震盪",
+  "reason": "美股科技股強勁台股可望跟漲"
+}}"""
 
-只輸出一行 JSON：
-{{"sentiment":"多頭","strength":75,"tsm_trend":"強勢","next_day":"上漲","reason":"美股科技股強勁台股可望跟漲"}}"""
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "topK": 40,
-            "topP": 0.95,
-            "maxOutputTokens": 512
+    result = _call_gemini_api(prompt, debug)
+    
+    if result:
+        # 更新全域市場情緒
+        US_MARKET_SENTIMENT = {
+            "analyzed": True,
+            "sentiment": result.get("sentiment", "中性"),
+            "strength": result.get("strength", 50),
+            "tsm_trend": result.get("tsm_trend", "持平"),
+            "tech_outlook": result.get("reason", ""),
+            "next_day_prediction": result.get("next_day", "震盪")
         }
-    }
-
-    api_url = f"https://generativelanguage.googleapis.com/v1/models/gemma-3-27b-it:generateContent?key={gemini_key}"
-
-    for attempt in range(3):
-        try:
-            if debug:
-                logging.info(f"🔄 美股分析 - 第 {attempt+1} 次呼叫 gemma-3-27b-it...")
-
-            res = requests.post(api_url, json=payload, timeout=30)
-            
-            if res.status_code == 429:
-                time.sleep(25 + attempt * 5)
-                continue
-                
-            if res.status_code != 200:
-                logging.error(f"API 錯誤 {res.status_code}")
-                if attempt < 2:
-                    time.sleep(5)
-                    continue
-                return {"decision": "ERROR", "confidence": 0, "reason": f"API錯誤 {res.status_code}"}
-
-            data = res.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            
-            # 清理並解析
-            clean_text = text.strip().replace("```json", "").replace("```", "").strip()
-            start_idx = clean_text.find("{")
-            end_idx = clean_text.rfind("}") + 1
-            if start_idx != -1 and end_idx > start_idx:
-                clean_text = clean_text[start_idx:end_idx]
-            
-            try:
-                result = json.loads(clean_text)
-                
-                # 更新全域市場情緒
-                US_MARKET_SENTIMENT = {
-                    "analyzed": True,
-                    "sentiment": result.get("sentiment", "中性"),
-                    "strength": result.get("strength", 50),
-                    "tsm_trend": result.get("tsm_trend", "持平"),
-                    "tech_outlook": result.get("reason", ""),
-                    "next_day_prediction": result.get("next_day", "震盪")
-                }
-                
-                if debug:
-                    logging.info(f"✅ 美股分析完成: {US_MARKET_SENTIMENT}")
-                
-                return {
-                    "decision": result.get("next_day", "震盪"),
-                    "confidence": result.get("strength", 50),
-                    "reason": result.get("reason", "美股分析完成")
-                }
-                
-            except json.JSONDecodeError:
-                # 備用解析
-                result = {
-                    "decision": "震盪",
-                    "confidence": 50,
-                    "reason": "美股數據解析異常"
-                }
-                US_MARKET_SENTIMENT["analyzed"] = True
-                break
-                
-        except Exception as e:
-            logging.error(f"美股分析異常: {str(e)[:50]}")
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            return {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
-
-    return result
-
+        
+        return {
+            "decision": result.get("next_day", "震盪"),
+            "confidence": result.get("strength", 50),
+            "reason": result.get("reason", "美股分析完成")
+        }
+    else:
+        # API 失敗時的備用值
+        US_MARKET_SENTIMENT["analyzed"] = True
+        return {
+            "decision": "震盪",
+            "confidence": 50,
+            "reason": "美股數據分析異常"
+        }
 
 def analyze_taiwan_stock(extra_data, target_name="台股標的", debug=False):
     """
     階段二：台股存股分析
     結合美股情緒進行判斷
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_key:
-        return {"decision": "觀望", "confidence": 0, "reason": "未設定 API Key"}
-
-    # 取得美股情緒
     us_sentiment = US_MARKET_SENTIMENT if US_MARKET_SENTIMENT["analyzed"] else {"next_day_prediction": "未知", "sentiment": "未知"}
 
     prompt = f"""你是專業存股經理人，分析台股標的「{target_name}」：
@@ -163,81 +178,33 @@ def analyze_taiwan_stock(extra_data, target_name="台股標的", debug=False):
 2. 價格位階: {extra_data.get('position', 'N/A')}
 3. 長期展望: {extra_data.get('outlook', 'N/A')}
 
-請判斷今日開盤策略（考量美股影響）：
-- 決策：積極買進/定期定額/觀望等待
-- 信心度：0-100
-- 理由：考量美股情緒、技術面、價格位階（40字內）
+請判斷今日開盤策略（考量美股影響），輸出 JSON（不要包含 Markdown 標記）：
+{{
+  "decision": "積極買進/定期定額/觀望等待",
+  "confidence": 70,
+  "reason": "美股偏多但台股位階偏高建議定期定額"
+}}"""
 
-只輸出一行 JSON：
-{{"decision":"定期定額","confidence":70,"reason":"美股偏多但台股位階偏高建議定期定額"}}"""
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "topK": 40,
-            "topP": 0.95,
-            "maxOutputTokens": 512
-        }
-    }
-
-    api_url = f"https://generativelanguage.googleapis.com/v1/models/gemma-3-27b-it:generateContent?key={gemini_key}"
+    result = _call_gemini_api(prompt, debug)
     
-    for attempt in range(3):
-        try:
-            if debug:
-                logging.info(f"🔄 台股存股分析 - 第 {attempt+1} 次呼叫 gemma-3-27b-it...")
-
-            res = requests.post(api_url, json=payload, timeout=30)
-            
-            if res.status_code == 429:
-                time.sleep(25 + attempt * 5)
-                continue
-                
-            if res.status_code != 200:
-                if attempt < 2:
-                    time.sleep(5)
-                    continue
-                return {"decision": "觀望", "confidence": 50, "reason": f"API錯誤 {res.status_code}"}
-
-            data = res.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            
-            clean_text = text.strip().replace("```json", "").replace("```", "").strip()
-            start_idx = clean_text.find("{")
-            end_idx = clean_text.rfind("}") + 1
-            if start_idx != -1 and end_idx > start_idx:
-                clean_text = clean_text[start_idx:end_idx]
-            
-            try:
-                result = json.loads(clean_text)
-                if debug:
-                    logging.info(f"✅ 台股分析完成: {result}")
-                return result
-            except json.JSONDecodeError:
-                if attempt < 2:
-                    time.sleep(5)
-                    continue
-                return {"decision": "觀望", "confidence": 50, "reason": "格式解析異常"}
-                
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            return {"decision": "觀望", "confidence": 50, "reason": str(e)[:40]}
-
-    return {"decision": "觀望", "confidence": 50, "reason": "分析超時"}
-
+    if result:
+        return {
+            "decision": result.get("decision", "觀望"),
+            "confidence": result.get("confidence", 50),
+            "reason": result.get("reason", "分析完成")
+        }
+    else:
+        return {
+            "decision": "觀望",
+            "confidence": 50,
+            "reason": "AI 分析異常"
+        }
 
 def analyze_grid_trading(extra_data, target_name="網格標的", debug=False):
     """
     階段三：網格交易分析
     結合美股情緒進行判斷
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_key:
-        return {"decision": "觀望", "confidence": 0, "reason": "未設定 API Key"}
-
     us_sentiment = US_MARKET_SENTIMENT if US_MARKET_SENTIMENT["analyzed"] else {"next_day_prediction": "未知"}
 
     prompt = f"""你是網格交易專家，分析「{target_name}」：
@@ -257,92 +224,70 @@ def analyze_grid_trading(extra_data, target_name="網格標的", debug=False):
 2. 美股若偏空，台股可能低開 → 是否提早佈局
 3. 結合 RSI 和趨勢
 
-請給出今日策略：
-- 決策：立即買進/等待回檔/觀望
-- 信心度：0-100
-- 理由：考量美股開盤影響（40字內）
+請給出今日策略，輸出 JSON（不要包含 Markdown 標記）：
+{{
+  "decision": "立即買進/等待回檔/觀望",
+  "confidence": 65,
+  "reason": "美股偏多台股恐高開建議等回補倉點"
+}}"""
 
-只輸出一行 JSON：
-{{"decision":"等待回檔","confidence":65,"reason":"美股偏多台股恐高開建議等回補倉點"}}"""
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "topK": 40,
-            "topP": 0.95,
-            "maxOutputTokens": 512
-        }
-    }
-
-    api_url = f"https://generativelanguage.googleapis.com/v1/models/gemma-3-27b-it:generateContent?key={gemini_key}"
+    result = _call_gemini_api(prompt, debug)
     
-    for attempt in range(3):
-        try:
-            if debug:
-                logging.info(f"🔄 網格交易分析 - 第 {attempt+1} 次呼叫 gemma-3-27b-it...")
-
-            res = requests.post(api_url, json=payload, timeout=30)
-            
-            if res.status_code == 429:
-                time.sleep(25 + attempt * 5)
-                continue
-                
-            if res.status_code != 200:
-                if attempt < 2:
-                    time.sleep(5)
-                    continue
-                return {"decision": "觀望", "confidence": 50, "reason": f"API錯誤"}
-
-            data = res.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            
-            clean_text = text.strip().replace("```json", "").replace("```", "").strip()
-            start_idx = clean_text.find("{")
-            end_idx = clean_text.rfind("}") + 1
-            if start_idx != -1 and end_idx > start_idx:
-                clean_text = clean_text[start_idx:end_idx]
-            
-            try:
-                result = json.loads(clean_text)
-                if debug:
-                    logging.info(f"✅ 網格分析完成: {result}")
-                return result
-            except json.JSONDecodeError:
-                if attempt < 2:
-                    time.sleep(5)
-                    continue
-                return {"decision": "觀望", "confidence": 50, "reason": "格式解析異常"}
-                
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            return {"decision": "觀望", "confidence": 50, "reason": str(e)[:40]}
-
-    return {"decision": "觀望", "confidence": 50, "reason": "分析超時"}
-
+    if result:
+        return {
+            "decision": result.get("decision", "觀望"),
+            "confidence": result.get("confidence", 50),
+            "reason": result.get("reason", "分析完成")
+        }
+    else:
+        return {
+            "decision": "觀望",
+            "confidence": 50,
+            "reason": "AI 分析異常"
+        }
 
 def get_us_market_sentiment():
     """取得當前美股市場情緒（供台股模組使用）"""
     return US_MARKET_SENTIMENT
 
-
 # === 向後相容的舊函式 ===
-def get_ai_point(extra_data=None, target_name="標的", summary_override=None, debug=False):
-    """向後相容：自動判斷使用哪種分析"""
-    if "US_MARKET" in target_name or "美股" in target_name:
-        return analyze_us_market(extra_data or {}, debug)
-    elif "網格" in target_name or "grid" in target_name.lower():
-        return analyze_grid_trading(extra_data or {}, target_name, debug)
-    else:
-        return analyze_taiwan_stock(extra_data or {}, target_name, debug)
+def get_ai_point(target_name=None, strategy_type=None, extra_data=None, debug=False, **kwargs):
+    """
+    向後相容函式：自動判斷使用哪種分析
+    """
+    # 處理舊版呼叫方式
+    if isinstance(target_name, dict) and extra_data is None:
+        extra_data = target_name
+        target_name = kwargs.get('target_name', 'Unknown_Target')
+    
+    if 'summary_override' in kwargs and kwargs['summary_override']:
+        extra_data = kwargs['summary_override']
+        strategy_type = "us_market"
+        target_name = "US_MARKET"
 
+    # 自動判斷策略類型
+    if not strategy_type:
+        if isinstance(extra_data, dict):
+            if 'grid_buy' in extra_data or 'rsi' in extra_data:
+                strategy_type = "grid_trading"
+            else:
+                strategy_type = "stock_audit"
+        elif isinstance(extra_data, str):
+            strategy_type = "us_market"
+        else:
+            strategy_type = "stock_audit"
+
+    # 根據策略類型呼叫對應函式
+    if "US_MARKET" in str(target_name) or strategy_type == "us_market":
+        return analyze_us_market(extra_data or {}, debug)
+    elif strategy_type == "grid_trading":
+        return analyze_grid_trading(extra_data or {}, str(target_name), debug)
+    else:
+        return analyze_taiwan_stock(extra_data or {}, str(target_name), debug)
 
 def get_us_ai_point(extra_data, debug=False):
     """美股專用（向後相容）"""
     return analyze_us_market(extra_data, debug)
-
 
 # === 測試 ===
 if __name__ == "__main__":
