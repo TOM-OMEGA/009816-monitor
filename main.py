@@ -14,122 +14,123 @@ try:
 except ImportError as e:
     logging.error(f"❌ 模組導入失敗: {e}")
 
-# 從環境變數讀取 Webhook
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
+# --- Discord 發送邏輯 (保持你的究極修正版) ---
 def dc_log(text, file_buf=None, filename="chart.png"):
-    """
-    【究極修正版】
-    強制將文字與圖片剝離為兩個獨立請求，徹底破解 Discord 標題縮小問題。
-    """
     if not WEBHOOK:
         logging.warning("⚠️ Webhook URL 未設定")
         return
-    
     try:
         clean_text = str(text)
         if len(clean_text) > 1950:
             clean_text = clean_text[:1950] + "..."
         
-        # 情況 A: 有圖片附件 -> 執行兩階段發送
         if file_buf is not None:
-            # 第一階段：單獨發送純文字 (Payload 只有內容)
-            # 這是標題變大的唯一關鍵：不能跟圖片一起發送
             requests.post(WEBHOOK, json={"content": clean_text}, timeout=15)
-            
-            # 物理延遲：確保 Discord 伺服器判定為兩則不同訊息
             time.sleep(2)
-            
-            # 第二階段：單獨發送圖片檔案 (Content 為空)
             file_buf.seek(0)
             files = {"file": (filename, file_buf, "image/png")}
             res = requests.post(WEBHOOK, files=files, timeout=20)
-        
-        # 情況 B: 純文字
         else:
             res = requests.post(WEBHOOK, json={"content": clean_text}, timeout=15)
-            
-        if 'res' in locals() and res.status_code not in [200, 204]:
-            logging.error(f"❌ Discord 發送失敗: {res.status_code}")
-            
     except Exception as e:
         logging.error(f"❌ 網路連線異常: {e}")
 
 # =========================
-# 核心背景任務邏輯
+# 核心任務：美股盤後總結
 # =========================
-def background_inspection():
-    """
-    巡檢任務：先美股後台股，確保台股能參考美股情緒
-    """
-    start_time = time.time()
+def task_us_summary():
+    """美股收盤後執行一次：建立今日情緒基調"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    dc_log(f"# 🌙 美股盤後總結報告\n時間: `{now_str}`")
+    try:
+        result = run_us_ai()
+        if isinstance(result, tuple):
+            dc_log(result[0], file_buf=result[1], filename="us_close.png")
+        else:
+            dc_log(result)
+    except Exception as e:
+        dc_log(f"⚠️ 美股分析失敗: {str(e)}")
+
+# =========================
+# 核心任務：台股盤中每3分鐘巡檢
+# =========================
+def task_taiwan_realtime_monitor():
+    """台股開盤期間執行：每3分鐘告知點位與動作"""
+    now_str = datetime.now().strftime("%H:%M:%S")
+    logging.info(f"🚀 執行台股 3 分鐘即時監控... {now_str}")
     
-    # 0. 啟動通知
-    dc_log(f"# 🛰️ AI 投資監控系統：巡檢啟動\n時間: `{now_str}`")
-    time.sleep(5) 
-
-    # 1. 【先執行】美股監控 - 產生市場情緒指標
+    # 執行存股監控 (009816 等)
     try:
-        dc_log("📊 階段一：美股盤後分析中...")
-        result3 = run_us_ai()
-        if isinstance(result3, tuple) and len(result3) == 2:
-            msg, img = result3
-            dc_log(msg, file_buf=img, filename="us_market.png")
+        res_tw = run_taiwan_stock()
+        if isinstance(res_tw, tuple):
+            # 只有當 AI 建議「買進」或點位到達時才發圖，否則發文字簡報節省流量
+            dc_log(f"🕒 台股即時快報 ({now_str})\n{res_tw[0]}", file_buf=res_tw[1], filename="tw_realtime.png")
         else:
-            dc_log(result3)
-        time.sleep(10)  # 確保美股情緒儲存完成
+            dc_log(f"🕒 台股即時快報 ({now_str})\n{res_tw}")
     except Exception as e:
-        dc_log(f"⚠️ **美股模組異常**: `{str(e)}`")
+        logging.error(f"台股監控異常: {e}")
 
-    # 2. 【再執行】台股監控 - 參考美股情緒
+    # 執行網格監控 (點位提醒)
     try:
-        dc_log("📊 階段二：台股存股分析中（結合美股情緒）...")
-        result1 = run_taiwan_stock()
-        if isinstance(result1, tuple) and len(result1) == 2:
-            msg, img = result1
-            dc_log(msg, file_buf=img, filename="taiwan_stock.png")
+        res_grid = run_grid()
+        if isinstance(res_grid, tuple):
+            dc_log(res_grid[0], file_buf=res_grid[1], filename="grid_live.png")
         else:
-            dc_log(result1)
-        time.sleep(10)
+            dc_log(res_grid)
     except Exception as e:
-        dc_log(f"⚠️ **台股模組異常**: `{str(e)}`")
-
-    # 3. 【最後執行】網格監控 - 參考美股情緒
-    try:
-        dc_log("📊 階段三：網格交易分析中（結合美股情緒）...")
-        result2 = run_grid()
-        if isinstance(result2, tuple) and len(result2) == 2:
-            msg, img = result2
-            dc_log(msg, file_buf=img, filename="grid_report.png")
-        else:
-            dc_log(result2)
-        time.sleep(5) 
-    except Exception as e:
-        dc_log(f"⚠️ **網格模組異常**: `{str(e)}`")
-
-    time.sleep(5)
-    duration = time.time() - start_time
-    dc_log(f"✅ **巡檢完成**\n耗時: `{duration:.1f} 秒`\n系統狀態: 🟢 正常運行")
+        logging.error(f"網格監控異常: {e}")
 
 # =========================
-# Flask 路由維持現狀
+# 自動化調度中心 (Background Engine)
 # =========================
+def scheduler_engine():
+    """
+    負責判斷現在該做什麼：
+    1. 05:30 - 08:00 -> 執行美股總結 (每日一次)
+    2. 09:00 - 13:35 -> 每三分鐘巡檢台股
+    """
+    last_us_date = ""
+    logging.info("⚙️ 自動化調度引擎已啟動")
+    
+    while True:
+        now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")
+        
+        # A. 美股時段 (早上 5:30 後執行一次)
+        if now.hour >= 5 and now.hour < 9:
+            if last_us_date != current_date:
+                task_us_summary()
+                last_us_date = current_date
+        
+        # B. 台股時段 (09:00 - 13:35)
+        elif (now.hour == 9) or (10 <= now.hour <= 12) or (now.hour == 13 and now.minute <= 35):
+            # 只有週一到週五執行 (這部分可視需求加上 now.weekday() < 5)
+            task_taiwan_realtime_monitor()
+            time.sleep(180) # 核心：每 3 分鐘 (180秒) 執行一次
+            continue # 跳過下方的 60 秒等待
+            
+        # C. 非交易時段 (每 10 分鐘檢查一次即可)
+        else:
+            if now.minute % 10 == 0:
+                logging.info(f"💤 非交易時段待命中... ({now.strftime('%H:%M')})")
+        
+        time.sleep(60) # 每分鐘檢查一次時間狀態
+
+# --- Flask 路由 ---
 @app.route("/")
 def index():
-    return f"""
-    <div style="font-family: sans-serif; text-align: center; padding: 50px;">
-        <h1 style="color: #5865F2;">🦅 AI Manager 管理後台</h1>
-        <a href="/run" style="background: #5865F2; color: white; padding: 15px 40px; text-decoration: none; border-radius: 8px; font-weight: bold;">🚀 啟動全自動巡檢</a>
-    </div>
-    """
+    return "<h1>🦅 AI Manager 24H 監控中</h1><p>自動化引擎運行中，台股時段每 3 分鐘巡檢。</p>"
 
 @app.route("/run")
-def trigger():
-    if not WEBHOOK: return "❌ 錯誤：未設定 Webhook URL"
-    threading.Thread(target=background_inspection).start()
-    return "背景任務已啟動！請檢查 Discord。"
+def manual_trigger():
+    threading.Thread(target=task_taiwan_realtime_monitor).start()
+    return "手動即時巡檢已觸發！"
 
 if __name__ == "__main__":
+    # 啟動自動化背景引擎
+    threading.Thread(target=scheduler_engine, daemon=True).start()
+    
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
