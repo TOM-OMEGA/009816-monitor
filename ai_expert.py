@@ -165,13 +165,14 @@ def analyze_us_market(extra_data, debug=False):
 4. 預測台股明日開盤方向（上漲/下跌/震盪）
 5. 給出投資建議
 
+
 請輸出 JSON（不要包含 Markdown 標記）：
 {{
   "sentiment": "多頭/空頭/中性",
   "strength": 75,
   "tsm_trend": "強勢/弱勢/持平",
   "next_day": "上漲/下跌/震盪",
-  "reason": "簡短理由（40字內）"
+  "reason": "詳細解釋理由（100字內）"
 }}"""
 
     result = _call_gemini_api(prompt, debug)
@@ -229,11 +230,12 @@ def analyze_taiwan_stock(extra_data, target_name="台股標的", debug=False):
 3. 結合技術面與基本面
 4. 給出今日開盤策略
 
+
 請輸出 JSON（不要包含 Markdown 標記）：
 {{
   "decision": "積極買進/定期定額/觀望等待",
   "confidence": 70,
-  "reason": "理由（50字內，需說明美股影響）"
+  "reason": "詳細說明理由，必需明確指出是否下單（100字內，需說明美股影響）"
 }}"""
 
     result = _call_gemini_api(prompt, debug)
@@ -282,7 +284,7 @@ def analyze_grid_trading(extra_data, target_name="網格標的", debug=False):
 {{
   "decision": "立即買進/等待回檔/觀望",
   "confidence": 65,
-  "reason": "理由（50字內，需說明美股影響）"
+  "reason": "詳細說明理由，必需指出是否下單（100字內，需說明美股影響）"
 }}"""
 
     result = _call_gemini_api(prompt, debug)
