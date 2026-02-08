@@ -35,17 +35,23 @@ def _call_gemini_api(prompt, debug=False):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 800
+            "temperature": 0.3,      # 降低隨機性，提高準確度
+            "topK": 64,              # 配合 thinking 模式
+            "topP": 0.95,            # 保持多樣性
+            "maxOutputTokens": 2048  # 提高輸出長度以容納深度思考
         }
     }
 
-    # 使用已驗證可運作的模型序列
+    # 使用支援深度思考的 Gemini 2.5/2.0 系列（已確認可用）
+    # gemini-2.5-flash: 最新穩定版，支援 thinking，100萬 token 輸入
+    # gemini-2.5-pro: Pro 級別，最強分析能力
+    # gemini-2.0-flash: 備援選擇
+    # gemma-3-27b-it: 開源備援（你之前驗證過）
     models_to_try = [
-        "gemma-3-27b-it",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-2.5-flash",      # 最佳選擇：thinking + 大輸出
+        "gemini-2.5-pro",        # Pro 級分析
+        "gemini-2.0-flash",      # 穩定備援
+        "gemma-3-27b-it"         # 開源備援
     ]
 
     for model_name in models_to_try:
@@ -112,7 +118,7 @@ def analyze_us_market(extra_data, debug=False):
     """
     global US_MARKET_SENTIMENT
 
-    prompt = f"""你是專業美股分析師，請分析今日盤後數據並預測台股明日開盤：
+    prompt = f"""你是專業美股分析師，請深度分析今日盤後數據並預測台股明日開盤。
 
 美股數據：
 - 標普500: {extra_data.get('spx', 'N/A')}
@@ -120,13 +126,20 @@ def analyze_us_market(extra_data, debug=False):
 - 台積電ADR: {extra_data.get('tsm', 'N/A')}
 - 技術面: {extra_data.get('tech', 'N/A')}
 
-請分析並輸出 JSON（不要包含 Markdown 標記）：
+分析步驟：
+1. 評估美股整體情緒（多頭/空頭/中性）
+2. 分析科技股動能強度（0-100）
+3. 判斷台積電ADR表現對台股的影響
+4. 預測台股明日開盤方向（上漲/下跌/震盪）
+5. 給出投資建議
+
+請輸出 JSON（不要包含 Markdown 標記）：
 {{
   "sentiment": "多頭/空頭/中性",
   "strength": 75,
   "tsm_trend": "強勢/弱勢/持平",
   "next_day": "上漲/下跌/震盪",
-  "reason": "美股科技股強勁台股可望跟漲"
+  "reason": "簡短理由（40字內）"
 }}"""
 
     result = _call_gemini_api(prompt, debug)
@@ -163,7 +176,7 @@ def analyze_taiwan_stock(extra_data, target_name="台股標的", debug=False):
     """
     us_sentiment = US_MARKET_SENTIMENT if US_MARKET_SENTIMENT["analyzed"] else {"next_day_prediction": "未知", "sentiment": "未知"}
 
-    prompt = f"""你是專業存股經理人，分析台股標的「{target_name}」：
+    prompt = f"""你是專業存股經理人，請深度分析台股標的「{target_name}」。
 
 技術數據：
 {extra_data.get('tech_summary', 'N/A')}
@@ -178,11 +191,17 @@ def analyze_taiwan_stock(extra_data, target_name="台股標的", debug=False):
 2. 價格位階: {extra_data.get('position', 'N/A')}
 3. 長期展望: {extra_data.get('outlook', 'N/A')}
 
-請判斷今日開盤策略（考量美股影響），輸出 JSON（不要包含 Markdown 標記）：
+分析步驟：
+1. 考量美股開盤方向（可能高開/低開/平盤）
+2. 評估當前價格位階（低檔適合積極/高檔宜觀望）
+3. 結合技術面與基本面
+4. 給出今日開盤策略
+
+請輸出 JSON（不要包含 Markdown 標記）：
 {{
   "decision": "積極買進/定期定額/觀望等待",
   "confidence": 70,
-  "reason": "美股偏多但台股位階偏高建議定期定額"
+  "reason": "理由（50字內，需說明美股影響）"
 }}"""
 
     result = _call_gemini_api(prompt, debug)
@@ -207,7 +226,7 @@ def analyze_grid_trading(extra_data, target_name="網格標的", debug=False):
     """
     us_sentiment = US_MARKET_SENTIMENT if US_MARKET_SENTIMENT["analyzed"] else {"next_day_prediction": "未知"}
 
-    prompt = f"""你是網格交易專家，分析「{target_name}」：
+    prompt = f"""你是網格交易專家，請深度分析「{target_name}」的網格策略。
 
 技術面：
 - 現價: {extra_data.get('price', 'N/A')}
@@ -219,16 +238,19 @@ def analyze_grid_trading(extra_data, target_name="網格標的", debug=False):
 - 明日預測: {us_sentiment.get('next_day_prediction', '未知')}
 - 台積電ADR: {us_sentiment.get('tsm_trend', '未知')}
 
-網格策略判斷（今日開盤）：
-1. 美股若偏多，台股可能高開 → 是否等回檔
-2. 美股若偏空，台股可能低開 → 是否提早佈局
-3. 結合 RSI 和趨勢
+分析步驟：
+1. 判斷美股對台股開盤的影響
+   - 美股偏多 → 台股可能高開 → 是否等回檔
+   - 美股偏空 → 台股可能低開 → 是否提早佈局
+2. 評估 RSI 超買/超賣狀態
+3. 結合趨勢與補倉點
+4. 給出今日策略
 
-請給出今日策略，輸出 JSON（不要包含 Markdown 標記）：
+請輸出 JSON（不要包含 Markdown 標記）：
 {{
   "decision": "立即買進/等待回檔/觀望",
   "confidence": 65,
-  "reason": "美股偏多台股恐高開建議等回補倉點"
+  "reason": "理由（50字內，需說明美股影響）"
 }}"""
 
     result = _call_gemini_api(prompt, debug)
