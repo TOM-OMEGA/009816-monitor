@@ -42,16 +42,13 @@ def _call_gemini_api(prompt, debug=False):
         }
     }
 
-    # 使用支援深度思考的 Gemini 2.5/2.0 系列（已確認可用）
-    # gemini-2.5-flash: 最新穩定版，支援 thinking，100萬 token 輸入
-    # gemini-2.5-pro: Pro 級別，最強分析能力
-    # gemini-2.0-flash: 備援選擇
-    # gemma-3-27b-it: 開源備援（你之前驗證過）
+    # 使用已驗證可用的模型
+    # gemma-3-27b-it: 你驗證過可正常運作（主力）
+    # gemini-2.0-flash: 備援（Gemini 2.0 系列仍可用）
     models_to_try = [
-        "gemini-2.5-flash",      # 最佳選擇：thinking + 大輸出
-        "gemini-2.5-pro",        # Pro 級分析
-        "gemini-2.0-flash",      # 穩定備援
-        "gemma-3-27b-it"         # 開源備援
+        "gemma-3-27b-it",        # 主力：已驗證可用
+        "gemini-2.0-flash",      # 備援：Gemini 2.0
+        "gemini-2.0-flash-001"   # 備援：Gemini 2.0 穩定版
     ]
 
     for model_name in models_to_try:
@@ -76,15 +73,22 @@ def _call_gemini_api(prompt, debug=False):
                 data = res.json()
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
                 
+                if debug:
+                    logging.info(f"📥 原始回應（前200字）: {text[:200]}")
+                
                 # 清理 Markdown 標記
                 text = re.sub(r'```json\n?|\n?```', '', text).strip()
+                
+                if debug:
+                    logging.info(f"🧹 清理後（前200字）: {text[:200]}")
                 
                 # 嘗試解析 JSON
                 try:
                     result = json.loads(text)
                     logging.info(f"✅ 成功使用 {model_name} 完成分析")
                     return result
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    logging.warning(f"⚠️ JSON 解析失敗: {str(e)[:100]}")
                     # 備用解析
                     result = _rescue_json(text)
                     if result:
@@ -98,18 +102,46 @@ def _call_gemini_api(prompt, debug=False):
     return None
 
 def _rescue_json(text):
-    """備用 JSON 解析器"""
+    """備用 JSON 解析器 - 強化版"""
     result = {"decision": "觀望", "confidence": 50, "reason": "解析錯誤"}
     try:
+        # 嘗試多種提取模式
+        # 模式 1: 標準 JSON 格式
         m_dec = re.search(r'"decision"\s*:\s*"([^"]+)"', text)
         if m_dec: result["decision"] = m_dec.group(1)
+        
         m_conf = re.search(r'"confidence"\s*:\s*(\d+)', text)
         if m_conf: result["confidence"] = int(m_conf.group(1))
-        m_reason = re.search(r'"reason"\s*:\s*"([^"]*?)"', text)
-        if m_reason: result["reason"] = m_reason.group(1)
+        
+        m_reason = re.search(r'"reason"\s*:\s*"([^"]*?)"', text, re.DOTALL)
+        if m_reason: 
+            result["reason"] = m_reason.group(1).strip()
+        
+        # 模式 2: 如果沒找到 reason，嘗試其他欄位
+        if result["reason"] == "解析錯誤":
+            # 嘗試找 sentiment (美股分析)
+            m_sentiment = re.search(r'"sentiment"\s*:\s*"([^"]+)"', text)
+            if m_sentiment:
+                result["decision"] = m_sentiment.group(1)
+            
+            # 嘗試找 next_day (美股分析)
+            m_next = re.search(r'"next_day"\s*:\s*"([^"]+)"', text)
+            if m_next:
+                result["decision"] = m_next.group(1)
+            
+            # 嘗試找任何文字描述
+            m_any_reason = re.search(r'理由[:：]\s*([^\n]+)', text)
+            if m_any_reason:
+                result["reason"] = m_any_reason.group(1).strip()
+            else:
+                # 使用 decision 作為 reason
+                result["reason"] = f"判斷為{result['decision']}"
+        
+        logging.info(f"🔧 備用解析成功: {result}")
         return result
-    except:
-        return None
+    except Exception as e:
+        logging.error(f"❌ 備用解析失敗: {e}")
+        return {"decision": "觀望", "confidence": 50, "reason": "資料格式異常"}
 
 def analyze_us_market(extra_data, debug=False):
     """
