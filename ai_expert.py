@@ -14,7 +14,8 @@ AI_CACHE = {}
 
 def get_ai_point(target_name=None, strategy_type=None, extra_data=None, debug=False, **kwargs):
     """
-    通用 AI 判斷函式 (全能相容版)
+    通用 AI 判斷函式 (未來相容版)
+    支援從 Gemma 3 到 Gemini 1.5 的全自動備援切換
     """
     global AI_CACHE
     now = datetime.now()
@@ -69,11 +70,11 @@ def get_ai_point(target_name=None, strategy_type=None, extra_data=None, debug=Fa
     elif strategy_type == "us_market":
         status_template = "AI 狀態：全球聯動分析中 🌏"
         market_info = extra_data if isinstance(extra_data, str) else str(extra_data)
-        prompt_context = f"請解讀美股數據並預測明日台股開盤：{market_info}"
+        prompt_context = f"請解讀美股數據並預測明日台股開盤氣氛：{market_info}"
 
     prompt = f"""
 {prompt_context}
-⚠️ 要求：必須以 JSON 格式輸出。
+⚠️ 要求：必須以 JSON 格式輸出，不要包含 Markdown 標記。
 格式範例：
 {{
   "decision": "買進/持有/觀望",
@@ -83,54 +84,70 @@ def get_ai_point(target_name=None, strategy_type=None, extra_data=None, debug=Fa
 }}
 """
 
-    # 🔧 修正：使用更標準的請求格式，避免 400 錯誤
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 1000
+            "maxOutputTokens": 800
         }
     }
 
     ai_result = {"decision": "觀望", "confidence": 0, "reason": "AI 連線逾時", "status": status_template}
     
-    # 4. 呼叫 API
-    for attempt in range(3):
-        try:
-            # 使用 v1beta 搭配 gemini-2.0-flash 是最穩定的組合
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-            res = requests.post(api_url, json=payload, timeout=30)
-
-            if res.status_code != 200:
-                logging.error(f"❌ API 錯誤 (狀態碼 {res.status_code}): {res.text}")
-            
-            res.raise_for_status()
-            data = res.json()
-
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            # 清洗 Markdown 格式
-            text = re.sub(r'```json\n?|\n?```', '', text).strip()
-            
+    # 🔧 未來相容序列：Gemma 3 -> Gemini 2.5 -> Gemini 2.0 -> Gemini 1.5
+    # 根據您的列表，gemma-3-27b-it 是可用的最強開源架構
+    models_to_try = [
+        "gemma-3-27b-it", 
+        "gemini-2.5-flash", 
+        "gemini-2.0-flash", 
+        "gemini-1.5-flash"
+    ]
+    
+    for model_name in models_to_try:
+        success = False
+        for attempt in range(2):
             try:
-                ai_result = json.loads(text)
-            except:
-                ai_result = _rescue_json(text, status_template)
+                # 統一使用 v1beta 端點
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                res = requests.post(api_url, json=payload, timeout=25)
 
-            break 
+                if res.status_code == 429:
+                    logging.warning(f"⚠️ 模型 {model_name} 額度耗盡，嘗試下一個...")
+                    break 
 
-        except Exception as e:
-            logging.error(f"❌ AI 請求異常: {e}")
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            ai_result = {"decision": "ERROR", "confidence": 0, "reason": "系統繁忙", "status": status_template}
+                if res.status_code != 200:
+                    logging.error(f"❌ {model_name} 錯誤 ({res.status_code}): {res.text[:150]}")
+                    break
+
+                res.raise_for_status()
+                data = res.json()
+
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                text = re.sub(r'```json\n?|\n?```', '', text).strip()
+                
+                try:
+                    ai_result = json.loads(text)
+                except:
+                    ai_result = _rescue_json(text, status_template)
+
+                success = True
+                logging.info(f"✅ 成功使用 {model_name} 完成分析")
+                break 
+
+            except Exception as e:
+                logging.error(f"❌ {model_name} 請求異常: {e}")
+                time.sleep(2)
+        
+        if success:
+            break
 
     AI_CACHE[key] = ai_result
     return ai_result
 
-# === 修正：這裡的參數傳遞必須正確 ===
 def get_us_ai_point(extra_data, debug=False):
-    # 修正：直接傳遞參數，不要帶上錯誤的 target_name 關鍵字
+    """
+    美股分析入口
+    """
     return get_ai_point(target_name="US_MARKET", strategy_type="us_market", extra_data=extra_data, debug=debug)
 
 def _rescue_json(text, default_status):
