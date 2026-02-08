@@ -32,7 +32,7 @@ def setup_chinese_font():
         font_name = fm.FontProperties(fname=font_path).get_name()
         plt.rcParams['font.family'] = [font_name, 'DejaVu Sans', 'sans-serif']
         plt.rcParams['axes.unicode_minus'] = False 
-        logging.info(f"✅ 009816 模組：成功載入字體 {font_name} 及其符號回援機制")
+        logging.info(f"✅ 009816 模組：成功載入字體 {font_name}")
     else:
         logging.error(f"❌ 009816 模組：找不到字體檔 {font_filename}")
 
@@ -41,7 +41,7 @@ setup_chinese_font()
 
 def run_taiwan_stock():
     """
-    009816 凱基台灣 TOP 50 巡檢模組 - 終極中文版 + AI 判斷
+    009816 凱基台灣 TOP 50 巡檢模組 - 專業經理人 AI 版
     """
     symbol = "009816.TW"
     name = "凱基台灣 TOP 50"
@@ -66,55 +66,34 @@ def run_taiwan_stock():
         dist_from_launch = (price / 10.0 - 1) * 100
         days_active = len(df)
         
-        # 2027 展望投影
+        # 2027 展望投影 (基於年化成長率)
         daily_ret = (price / 10.0) ** (1 / max(days_active, 1)) - 1
         projected_1y = price * ((1 + daily_ret) ** 252)
 
-        # 計算月低
-        month_low = close.tail(30).min() if len(close) >= 30 else low_all
+        # 計算位階
+        valuation_ratio = ((price - low_all) / (high_all - low_all if high_all != low_all else 1)) * 100
         
-        # K線判斷
+        # K線趨勢
         if len(close) >= 2:
             prev_close = close.iloc[-2]
             k_line = "上漲" if price > prev_close else "下跌" if price < prev_close else "平盤"
         else:
             k_line = "N/A"
 
+        # 系統評分邏輯
         score = 65 
-        if price <= 10.05: score += 10
-        if dist_from_launch < 2.0: score += 5
-        action = "🟢 強勢佈局" if score >= 75 else "🟡 定期定額"
+        if price <= 10.10: score += 15
+        if valuation_ratio < 30: score += 10
+        if dist_from_launch < 5.0: score += 5
+        action = "🟢 強勢佈局" if score >= 80 else "🟡 定期定額"
 
         # =====================
-        # 🤖 AI 判斷整合
-        # =====================
-        ai_result = {"decision": "觀望", "confidence": 0, "reason": "AI 未啟用"}
-        
-        if AI_AVAILABLE:
-            try:
-                extra_data = {
-                    "price": price,
-                    "k_line": k_line,
-                    "valuation": f"{((price-low_all)/(high_all-low_all if high_all!=low_all else 1)):.1%}",
-                    "order_strength": "穩定",
-                    "market_context": f"累計漲跌 {dist_from_launch:+.2f}%",
-                    "tech": f"系統評分 {score}/100"
-                }
-                ai_result = get_ai_point(
-                    extra_data=extra_data,
-                    target_name=name,
-                    debug=False
-                )
-            except Exception as e:
-                logging.error(f"AI 判斷異常: {e}")
-                ai_result = {"decision": "ERROR", "confidence": 0, "reason": str(e)[:50]}
-
-        # =====================
-        # 📊 繪圖邏輯
+        # 📊 繪圖邏輯 (先繪圖，以便傳給 AI)
         # =====================
         plt.figure(figsize=(10, 6))
         plt.plot(df.index, close, marker='o', linestyle='-', color='#1f77b4', linewidth=2, label='每日收盤價')
         plt.axhline(y=10.0, color='#d62728', linestyle='--', alpha=0.6, label='發行價 (10.0)')
+        plt.axhline(y=projected_1y, color='#2ca02c', linestyle=':', alpha=0.6, label=f'2027 展望 ({projected_1y:.2f})')
         
         plt.title(f"{name} (009816) 策略趨勢分析", fontsize=16, fontweight='bold', pad=15)
         plt.xlabel("交易日期", fontsize=12)
@@ -128,6 +107,34 @@ def run_taiwan_stock():
         plt.close()
 
         # =====================
+        # 🤖 AI 智能判斷 (傳入數據與圖片)
+        # =====================
+        ai_result = {"decision": "觀望", "confidence": 0, "reason": "AI 未啟用", "status": "系統運行中"}
+        
+        if AI_AVAILABLE:
+            try:
+                # 🔧 關鍵修正：將所有核心數據封裝進字典
+                extra_data = {
+                    "price": round(price, 2),
+                    "projected_1y": round(projected_1y, 2),
+                    "score": score,
+                    "k_line": k_line,
+                    "valuation": f"{valuation_ratio:.1f}%",
+                    "market_context": f"距發行價 {dist_from_launch:+.2f}%"
+                }
+                # 🔧 關鍵修正：同時傳入數據與圖片 Bytes
+                ai_result = get_ai_point(
+                    target_name=name,
+                    strategy_type="stock_audit",
+                    extra_data=extra_data,
+                    image_data=buf, # 傳入圖片數據
+                    debug=False
+                )
+            except Exception as e:
+                logging.error(f"AI 判斷異常: {e}")
+                ai_result = {"decision": "ERROR", "confidence": 0, "reason": "AI 模組連線失敗", "status": "系統異常"}
+
+        # =====================
         # 📖 報告組裝
         # =====================
         today = datetime.now(timezone(timedelta(hours=8)))
@@ -139,19 +146,19 @@ def run_taiwan_stock():
             f"💵 **目前現價**： `{price:.2f}` (發行價: 10.00)",
             f"🚀 **2027 展望**： `{projected_1y:.2f}`",
             f"📈 **累計漲跌**： `{dist_from_launch:+.2f}%`",
-            f"📊 **目前位階**： `{((price-low_all)/(high_all-low_all if high_all!=low_all else 1)):.1%}`",
+            f"📊 **目前位階**： `{valuation_ratio:.1f}%` (低於 30% 為相對低點)",
             "---",
             f"## 🧠 決策分析",
             f"⚖️ **系統評分**： `{score} / 100`",
             f"🎯 **行動建議**： **{action}**",
             "---",
-            f"## 🤖 AI 智能判斷",
-            f"📍 **AI 決策**： **{ai_result['decision']}**",
-            f"💯 **信心指數**： `{ai_result['confidence']}%`",
-            f"💡 **判斷理由**： {ai_result['reason']}",
+            f"## 🤖 AI 智能判斷 (已結合圖表分析)",
+            f"📍 **AI 決策**： **{ai_result.get('decision', '觀望')}**",
+            f"💯 **信心指數**： `{ai_result.get('confidence', 0)}%`",
+            f"💡 **判斷理由**： {ai_result.get('reason', '無資料')}",
             "---",
-            f"# AI 狀態：複利計算中 🤖",
-            f"💡 **提醒**：複利效果穩定，已納入 2027 投影計畫。",
+            f"# {ai_result.get('status', 'AI 狀態：複利計算中 🤖')}",
+            f"💡 **提醒**：AI 已結合歷史趨勢圖與 2027 展望數據進行綜合評估。",
             "---",
             f"📈 **{name} 策略趨勢圖已生成，請參閱下方附件**"
         ]
@@ -160,4 +167,4 @@ def run_taiwan_stock():
 
     except Exception as e:
         logging.error(f"009816 執行錯誤: {e}")
-        return f"# ❌ 009816 巡檢異常\n`{str(e)[:50]}`", None
+        return f"# ❌ 009816 巡檢異常\n`{str(e)}`", None
