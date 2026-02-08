@@ -1,306 +1,178 @@
-# ai_expert.py
 import os
 import requests
 import json
-from datetime import datetime
 import time
+import re
 import logging
+from datetime import datetime
 
 # === 設定 logging ===
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # === AI 冷卻 / Cache ===
 AI_CACHE = {}
-AI_LAST_CALL = {}
-AI_COOLDOWN_MINUTES = 5
+AI_COOLDOWN_MINUTES = 1
 
-def get_ai_point(extra_data=None, target_name="標的", summary_override=None, debug=False):
+def get_ai_point(target_name, strategy_type, extra_data):
     """
-    核心 AI 判斷函式 (Gemini API)
-    支援台股存股 / 網格策略 / 美股盤後
+    通用 AI 判斷函式 (支援三種策略分流) - 強固 JSON 版
     """
-    global AI_CACHE, AI_LAST_CALL
+    global AI_CACHE
     now = datetime.now()
+    
+    # 建立 Cache Key
+    key = f"{target_name}_{strategy_type}_{now.strftime('%H%M')}"
 
-    # --- 檢查 API Key ---
+    # 1. 檢查 Cache
+    if key in AI_CACHE:
+        return AI_CACHE[key]
+
+    # 2. 檢查 API Key
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:
-        error_msg = "❌ 未設定 GEMINI_API_KEY 環境變數"
-        logging.error(error_msg)
-        return {"decision": "ERROR", "confidence": 0, "reason": error_msg}
+        return {"decision": "ERROR", "confidence": 0, "reason": "尚未設定 GEMINI_API_KEY", "status": "系統異常"}
 
-    # --- summary 補齊欄位 ---
-    d = extra_data or {}
-    defaults = {
-        "price": 0,
-        "inst": "N/A",
-        "holders": "N/A",
-        "order_strength": "穩定",
-        "valuation": "合理",
-        "day_trade": "穩定",
-        "k_line": "N/A",
-        "market_context": "N/A",
-        "idx_5s": "N/A",
-        "US_signal": "N/A",
-        "rev": "N/A",
-        "tech": "N/A",
-        "spx": "N/A",
-        "nasdaq": "N/A",
-        "sox": "N/A",
-        "tsm": "N/A"
-    }
-    for k, v in defaults.items():
-        if k not in d:
-            d[k] = v
+    # ==========================================
+    # 🧠 策略分流與 Prompt 組裝
+    # ==========================================
+    prompt_context = ""
+    status_template = ""
+    
+    if strategy_type == "stock_audit":
+        d = extra_data
+        status_template = "AI 狀態：複利計算中 🤖\n💡 提醒：複利效果穩定，已納入 2027 投影計畫。"
+        prompt_context = f"""
+你是一位長期價值投資經理人，請評估 "{target_name}" 的存股價值。
+【關鍵數據】
+- 目前股價: {d.get('price')}
+- 2027年投影目標價: {d.get('projected_1y')}
+- 系統綜合評分: {d.get('score')} / 100
+- 距離發行價: {d.get('dist')}%
+【指令】
+1. 判斷股價相對於 2027 年目標是否具有安全邊際。
+2. 給出「買進」、「持有」或「觀望」的明確建議。
+"""
 
-    # --- summary text ---
-    if summary_override:
-        summary_text = summary_override
-    else:
-        summary_text = (
-            f"1. 現價: {d.get('price')}\n"
-            f"2. K線/量: {d.get('k_line')}\n"
-            f"3. 盤中5s力道: {d.get('order_strength')}\n"
-            f"4. 價值位階: {d.get('valuation')}\n"
-            f"5. 市場脈動: {d.get('market_context')}\n"
-            f"6. 大盤5s脈動: {d.get('idx_5s')}\n"
-            f"7. 籌碼穩定: 法人 {d.get('inst')}, 大戶 {d.get('holders')}, 日內 {d.get('day_trade')}\n"
-            f"8. 美股參考: {d.get('US_signal')}\n"
-            f"9. 基本面: {d.get('rev')}\n"
-            f"10. 技術結構: {d.get('tech')}"
-        )
+    elif strategy_type == "grid_trading":
+        d = extra_data
+        status_template = "AI 狀態：網格監控中 📉\n💡 提醒：嚴守動態間距，避免情緒化手動交易。"
+        prompt_context = f"""
+你是一位高頻網格交易員，請評估 "{target_name}" 的短線波動機會。
+【關鍵數據】
+- 現價: {d.get('price')}
+- 短線趨勢: {d.get('trend')}
+- RSI (14): {d.get('rsi')}
+- 布林下緣 (補倉點): {d.get('grid_buy')}
+【指令】
+1. 若 RSI < 35 且趨勢超跌，建議積極補倉。
+2. 若 RSI > 70，建議暫停買入。
+"""
 
-    # --- Cache Key ---
-    key = f"{target_name}_{summary_text[:50]}"
+    elif strategy_type == "us_market":
+        status_template = "AI 狀態：全球聯動分析中 🌏\n💡 提醒：科技股波動劇烈，注意 TSM 溢價風險。"
+        prompt_context = f"""
+你是一位宏觀市場分析師，請解讀以下美股數據並預測明日台股開盤氣氛。
+【市場摘要】
+{extra_data}
+【指令】重點關注科技股 (TSM/SOX) 對台股的影響，判斷情緒是樂觀、悲觀還是震盪。
+"""
 
-    # --- 冷卻檢查 ---
-    last_call = AI_LAST_CALL.get(key)
-    if last_call and (now - last_call).total_seconds() < AI_COOLDOWN_MINUTES * 60:
-        if debug: 
-            logging.info(f"🕒 冷卻中 (使用 Cache) {target_name}")
-        return AI_CACHE.get(key, {"decision":"觀望","confidence":50,"reason":"使用快取結果"})
+    # 加上統一的 JSON 輸出要求
+    prompt = f"""
+{prompt_context}
 
-    # --- Prompt ---
-    focus = "【重點監控：TSM/SOX 科技連動】" if any(x in target_name for x in ["2317", "00929", "TSM"]) else "【重點監控：趨勢脈動】"
-    persona_logic = (
-        f"身分：專業投資分析師。標的：{target_name}。{focus}\n"
-        "請嚴守十條實戰鐵律：1.期望值 2.非加碼 3.趨勢濾網 4.動態間距 5.資金控制 "
-        "6.除息還原 7.低成本 8.情緒收割 9.連動風險 10.自動化。"
-    )
+⚠️ Output strictly in JSON format. No Markdown.
+Required fields:
+{{
+  "decision": "Your decision here",
+  "confidence": 80,
+  "reason": "Short explanation in Traditional Chinese (max 50 words)",
+  "status": "{status_template}"
+}}
+"""
 
-    prompt = f"""你是專業投資分析師。標的：{target_name}
-
-技術數據：
-{summary_text}
-
-請用以下格式回答，只輸出一行 JSON，不要有換行、空格或其他文字：
-{{"decision":"可行","confidence":75,"reason":"簡短理由"}}
-
-decision 選項：可行/不可行/觀望
-confidence 範圍：0-100
-reason 限制：少於50字
-
-現在請分析並輸出 JSON："""
-
+    # 3. 設定 API Payload (強制 JSON 模式)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}], 
         "generationConfig": {
-            "temperature": 0.3,
-            "topK": 40,
-            "topP": 0.95,
-            "maxOutputTokens": 1024
+            "temperature": 0.2,
+            "response_mime_type": "application/json"  # <--- 關鍵修改：強制 API 回傳 JSON
         }
     }
 
-    # --- 呼叫 API + 重試 ---
-    ai_result = {"decision": "觀望", "confidence": 0, "reason": "AI 分析超時"}
+    ai_result = {"decision": "觀望", "confidence": 0, "reason": "AI 連線逾時", "status": status_template}
     
-    # 使用 Gemini 2.5 Flash（2025年6月發布的穩定版）
-    # 支援 100萬 token 輸入，6.5萬 token 輸出
-    api_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={gemini_key}"
-    
+    # 4. 呼叫 API + 強化重試機制
     for attempt in range(3):
         try:
-            if debug:
-                logging.info(f"🔄 第 {attempt+1} 次呼叫 Gemini API...")
-                logging.info(f"📍 使用模型: gemini-2.5-flash")
-            
+            api_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={gemini_key}"
             res = requests.post(api_url, json=payload, timeout=30)
 
-            # 處理限流
             if res.status_code == 429:
                 wait_time = 25 + (attempt * 5)
-                logging.warning(f"⚠️ 第 {attempt+1} 次 API 限流，等待 {wait_time} 秒...")
+                logging.warning(f"⚠️ AI 限流 (429)，等待 {wait_time} 秒...")
                 time.sleep(wait_time)
                 continue
 
-            # 處理其他錯誤
-            if res.status_code != 200:
-                error_msg = f"API 錯誤 {res.status_code}: {res.text[:150]}"
-                logging.error(error_msg)
-                if attempt < 2:
-                    time.sleep(5)
-                    continue
-                return {"decision": "ERROR", "confidence": 0, "reason": f"API錯誤 {res.status_code}"}
-
+            res.raise_for_status()
             data = res.json()
 
-            # 檢查回應格式
-            if "candidates" not in data or not data["candidates"]:
-                error_msg = "API 回應格式錯誤"
-                logging.error(f"{error_msg}: {data}")
-                if attempt < 2:
-                    time.sleep(5)
-                    continue
-                return {"decision": "ERROR", "confidence": 0, "reason": error_msg}
-
-            # 解析 AI 回傳文字
+            # 解析與清洗
             text = data["candidates"][0]["content"]["parts"][0]["text"]
             
-            if debug:
-                logging.info(f"📥 原始回應: {text[:200]}...")
-            
-            # 多層清理策略
-            clean_text = text.strip()
-            
-            # 移除 Markdown 代碼塊標記
-            clean_text = clean_text.replace("```json", "").replace("```", "")
-            
-            # 移除前後空白和換行
-            clean_text = clean_text.strip()
-            
-            # 嘗試找到 JSON 物件的開始和結束
-            start_idx = clean_text.find("{")
-            end_idx = clean_text.rfind("}") + 1
-            
-            if start_idx != -1 and end_idx > start_idx:
-                clean_text = clean_text[start_idx:end_idx]
-            
-            # 修正常見的 JSON 格式問題
-            clean_text = clean_text.replace("\n", " ").replace("\r", "")
-            
+            # 嘗試標準 JSON 解析
             try:
-                ai_result = json.loads(clean_text)
-                
-                # 驗證必要欄位
-                if "decision" not in ai_result:
-                    ai_result["decision"] = "觀望"
-                if "confidence" not in ai_result:
-                    ai_result["confidence"] = 50
-                if "reason" not in ai_result:
-                    ai_result["reason"] = "AI 分析完成"
-                
-                if debug:
-                    logging.info(f"✅ API 呼叫成功: {ai_result}")
-                
-                break
-                
-            except json.JSONDecodeError as json_err:
-                # JSON 解析失敗，嘗試手動提取資訊
-                logging.warning(f"⚠️ JSON 解析失敗，嘗試手動提取: {str(json_err)[:50]}")
-                
-                # 手動解析模式（備用方案）
-                decision = "觀望"
-                confidence = 50
-                reason = "AI 分析結果格式異常"
-                
-                # 簡單的關鍵字匹配
-                text_lower = text.lower()
-                if "可行" in text or "買入" in text or "進場" in text:
-                    decision = "可行"
-                    confidence = 70
-                elif "不可行" in text or "賣出" in text or "離場" in text:
-                    decision = "不可行"
-                    confidence = 70
-                
-                # 提取理由（取前80字）
-                if "理由" in text or "reason" in text_lower:
-                    reason_start = max(text.find("理由"), text_lower.find("reason"))
-                    if reason_start != -1:
-                        reason = text[reason_start:reason_start+100].strip()
-                
-                ai_result = {
-                    "decision": decision,
-                    "confidence": confidence,
-                    "reason": reason[:80]
-                }
-                
-                logging.info(f"🔧 使用備用解析: {ai_result}")
-                break
+                ai_result = json.loads(text)
+            except json.JSONDecodeError:
+                logging.warning("⚠️ 標準 JSON 解析失敗，嘗試 Regex 救援...")
+                ai_result = _rescue_json(text, status_template)
 
-        except json.JSONDecodeError as e:
-            error_msg = f"JSON 解析失敗"
-            logging.error(f"{error_msg}: {str(e)[:50]}")
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            ai_result = {"decision": "觀望", "confidence": 50, "reason": "格式解析異常"}
-            
-        except requests.exceptions.Timeout:
-            error_msg = "API 請求超時"
-            logging.error(error_msg)
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            ai_result = {"decision": "ERROR", "confidence": 0, "reason": error_msg}
-            
+            # 確保 status 欄位存在 (防呆)
+            if "status" not in ai_result or not ai_result["status"]:
+                ai_result["status"] = status_template
+
+            break 
+
         except Exception as e:
-            error_msg = f"異常: {str(e)[:80]}"
-            logging.error(error_msg)
+            logging.error(f"AI 請求異常 (第 {attempt+1} 次): {e}")
             if attempt < 2:
                 time.sleep(5)
                 continue
-            ai_result = {"decision": "ERROR", "confidence": 0, "reason": error_msg}
+            ai_result = {"decision": "ERROR", "confidence": 0, "reason": f"系統異常: {str(e)[:20]}", "status": status_template}
 
-    # --- 更新 Cache ---
     AI_CACHE[key] = ai_result
-    AI_LAST_CALL[key] = now
-
-    if debug: 
-        logging.info(f"🤖 AI 判斷 ({target_name}): {ai_result}")
-    
     return ai_result
 
-
-# === 美股專用 AI 判斷 ===
-def get_us_ai_point(extra_data, debug=False):
+def _rescue_json(text, default_status):
     """
-    美股盤後專用,只判斷風險模式
+    當 json.loads 失敗時的備用解析器 (Regex Rescue)
     """
-    summary = (
-        f"S&P500: {extra_data.get('spx')}\n"
-        f"NASDAQ: {extra_data.get('nasdaq')}\n"
-        f"SOX: {extra_data.get('sox')}\n"
-        f"TSM: {extra_data.get('tsm')}\n"
-        f"技術結構: {extra_data.get('tech')}"
-    )
-
-    return get_ai_point(
-        extra_data=extra_data,
-        target_name="US_MARKET",
-        summary_override=summary,
-        debug=debug
-    )
-
-
-# === 測試函式 ===
-if __name__ == "__main__":
-    """本地測試用"""
-    logging.info("🧪 開始測試 AI 模組...")
+    result = {
+        "decision": "觀望",
+        "confidence": 50,
+        "reason": "解析錯誤，請查看原始日誌",
+        "status": default_status
+    }
     
-    # 檢查 API Key
-    if not os.environ.get("GEMINI_API_KEY"):
-        logging.error("❌ 請先設定環境變數: export GEMINI_API_KEY='你的金鑰'")
+    # 1. 嘗試抓取 decision
+    m_dec = re.search(r'"decision"\s*:\s*"([^"]+)"', text)
+    if m_dec: result["decision"] = m_dec.group(1)
+    
+    # 2. 嘗試抓取 confidence (數字)
+    m_conf = re.search(r'"confidence"\s*:\s*(\d+)', text)
+    if m_conf: result["confidence"] = int(m_conf.group(1))
+    
+    # 3. 嘗試抓取 reason (最容易出錯的地方)
+    # 使用非貪婪匹配，直到遇到下一個引號結束
+    m_reason = re.search(r'"reason"\s*:\s*"([^"]*?)"', text, re.DOTALL)
+    if m_reason: 
+        result["reason"] = m_reason.group(1)
     else:
-        logging.info("✅ API Key 已設定")
-        
-        # 測試呼叫
-        test_data = {
-            "price": 15.5,
-            "k_line": "上漲",
-            "valuation": "50%",
-            "tech": "MA20 交叉向上"
-        }
-        
-        result = get_ai_point(extra_data=test_data, target_name="測試標的", debug=True)
-        logging.info(f"📊 測試結果: {result}")
+        # 如果失敗，嘗試寬鬆抓取
+        clean_text = text.replace('"', '').replace('{', '').replace('}', '')
+        if "reason:" in clean_text:
+            parts = clean_text.split("reason:")
+            if len(parts) > 1:
+                result["reason"] = parts[1].split(",")[0].strip()
+
+    return result
