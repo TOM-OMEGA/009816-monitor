@@ -140,14 +140,20 @@ Required fields:
     # 4. 呼叫 API + 強化重試機制
     for attempt in range(3):
         try:
-            api_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+            # 🔧 修復：使用正確的 API 版本路徑 (v1beta) 和模型名稱 (gemini-1.5-flash)
+            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
             res = requests.post(api_url, json=payload, timeout=30)
 
             if res.status_code == 429:
                 wait_time = 25 + (attempt * 5)
+                logging.warning(f"⚠️ API 速率限制，等待 {wait_time} 秒...")
                 time.sleep(wait_time)
                 continue
 
+            # 🔧 改進：在 raise_for_status 前先記錄錯誤回應
+            if res.status_code != 200:
+                logging.error(f"❌ API 回應錯誤 (狀態碼 {res.status_code}): {res.text}")
+            
             res.raise_for_status()
             data = res.json()
 
@@ -164,10 +170,18 @@ Required fields:
             if "status" not in ai_result or not ai_result["status"]:
                 ai_result["status"] = status_template
 
+            logging.info(f"✅ AI 分析成功: {ai_result.get('decision', 'N/A')}")
             break 
 
         except Exception as e:
-            logging.error(f"AI 請求異常: {e}")
+            logging.error(f"❌ AI 請求異常 (第 {attempt + 1} 次嘗試): {e}")
+            # 🔧 改進：記錄完整的錯誤回應內容
+            try:
+                if 'res' in locals() and hasattr(res, 'text'):
+                    logging.error(f"API 回應內容: {res.text[:500]}")
+            except:
+                pass
+            
             if attempt < 2:
                 time.sleep(5)
                 continue
