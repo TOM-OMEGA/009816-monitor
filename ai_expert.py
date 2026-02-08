@@ -42,10 +42,10 @@ def _call_gemini_api(prompt, debug=False):
 
     # 使用已驗證可運作的模型序列
     models_to_try = [
-        "gemma-3-27b-it",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-3-flash-preview",  # 優先使用思考型，邏輯最準
+        "gemma-3-27b-it",          # 開源最強推理
+        "gemini-2.5-flash", 
+        "gemini-2.0-flash"
     ]
 
     for model_name in models_to_try:
